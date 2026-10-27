@@ -28,10 +28,17 @@ export interface Facts {
   profileReadme: string | null
 }
 
+let limited = false
+/** True once if any call hit GitHub's anonymous rate limit since the last check. */
+export function takeRateLimited() { const v = limited; limited = false; return v }
+
 export async function gh<T>(path: string): Promise<T> {
   const res = await fetch(API + path, { headers: { Accept: 'application/vnd.github+json' } })
   if (res.status === 404) throw new Error('Not found on GitHub')
-  if (res.status === 403 || res.status === 429) throw new Error('GitHub rate limit hit (60/hr). Try again later.')
+  if (res.status === 403 || res.status === 429) {
+    limited = true
+    throw new Error('GitHub rate limit hit (60/hr). Try again later.')
+  }
   if (!res.ok) throw new Error(`GitHub error ${res.status}`)
   return res.json()
 }

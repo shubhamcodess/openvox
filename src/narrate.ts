@@ -24,9 +24,9 @@ export function introScript(f: Facts): string[] {
   return s
 }
 
-export function repoIntro(r: RepoFacts): string[] {
+export function repoIntro(r: RepoFacts, ownerName?: string | null): string[] {
   const s: string[] = []
-  s.push(`${r.name.replace(/[-_]/g, ' ')}, by ${r.owner}.`)
+  s.push(`${r.name.replace(/[-_]/g, ' ')}, by ${ownerName || r.owner}.`)
   if (r.description) s.push(r.description.replace(/[\r\n]+/g, ' ').slice(0, 180).replace(/[.\s]+$/, '') + '.')
   s.push(`${n(r.stars, 'star')} and ${n(r.forks, 'fork')}${r.languages[0] ? `, written mostly in ${r.languages[0][0]}` : ''}.`)
   if (r.contributors.count) s.push(`${r.contributors.capped ? 'At least ' : ''}${r.contributors.count} ${r.contributors.count === 1 ? 'contributor' : 'contributors'}${r.license ? `, under the ${r.license} license` : ''}.`)

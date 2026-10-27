@@ -29,6 +29,15 @@ const EXT: Record<string, string> = {
   toml: 'tom el', rs: 'R S', go: 'go', css: 'C S S', html: 'H T M L', sh: 'S H', txt: 'T X T', lock: 'lock', mjs: 'M J S', cjs: 'C J S',
 }
 
+/**
+ * Your own respellings for names the voice gets wrong. Keys are lowercase; values are what to say.
+ * A 31M model cannot guess rare names, so teach it here (e.g. torvalds: 'tor valds').
+ */
+export const PRONOUNCE: Record<string, string> = {
+  qwen: 'chwen', huggingface: 'hugging face', chatgpt: 'chat G P T', webllm: 'web L L M', pytorch: 'pie torch',
+  gguf: 'G G U F', onnx: 'onyx', xml: 'X M L', gpt: 'G P T', jpeg: 'jay peg',
+}
+
 const spell = (w: string) => w.toUpperCase().split('').join(' ')
 const VOWEL = /[AEIOU]/
 
@@ -37,6 +46,7 @@ function pronounce(w: string): string {
   if (w === 'PRs') return 'pull requests'
   if (w === 'OSS') return 'open source'
   const lower = w.toLowerCase()
+  if (Object.hasOwn(PRONOUNCE, lower)) return PRONOUNCE[lower]
   if (Object.hasOwn(SAY, lower)) return SAY[lower]
   if (SPELL_LOWER.has(lower)) return spell(lower)
   if (lower.endsWith('s') && SPELL_LOWER.has(lower.slice(0, -1))) return spell(lower.slice(0, -1)) + "'s"

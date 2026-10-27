@@ -32,7 +32,7 @@ export interface Speaker {
 
 /** Incremental speaker: push sentences while they are still being produced (e.g. by an LLM). */
 export function startSpeaker(
-  onSentence: (i: number) => void = () => {},
+  onSentence: (i: number, text?: string) => void = () => {},
   onFirstAudio?: (ms: number) => void,
 ): Speaker {
   if (!tts) throw new Error('voice not loaded')
@@ -80,7 +80,7 @@ export function startSpeaker(
         cursor = Math.max(cursor, ctx.currentTime)
         if (!started) {
           started = true
-          setTimeout(() => !signal.aborted && onSentence(idx), Math.max(0, (cursor - ctx!.currentTime) * 1000))
+          setTimeout(() => !signal.aborted && onSentence(idx, sentence), Math.max(0, (cursor - ctx!.currentTime) * 1000))
         }
         if (first) { first = false; onFirstAudio?.(Math.round(performance.now() - t0)) }
         src.start(cursor)
@@ -101,7 +101,7 @@ export function startSpeaker(
 
 export async function speak(
   sentences: string[],
-  onSentence: (i: number) => void,
+  onSentence: (i: number, text?: string) => void,
   onFirstAudio?: (ms: number) => void,
 ) {
   const sp = startSpeaker(onSentence, onFirstAudio)
