@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import Orb from './Orb'
 import { loadFacts, type Facts } from './github'
-import { introScript } from './narrate'
+import { introScript, repoIntro } from './narrate'
+import { loadRepo, parseTarget, type RepoBundle } from './repo'
 import { loadVoice, speak, startSpeaker, stop } from './speech'
-import { answer, SentenceChunker, clean } from './ask'
+import { answer, answerRepo, buildRepoMessages, sourceLabel, SentenceChunker, clean } from './ask'
 import { DEFAULT_MODEL, loadModel, type Msg } from './llm'
 import Eval from './Eval'
 
@@ -15,10 +16,12 @@ export default function App() {
 }
 
 function Main() {
-  const [turns, setTurns] = useState<{ q: string; a: string }[]>([])
+  const [turns, setTurns] = useState<{ q: string; a: string; src?: string[] }[]>([])
+  const [repo, setRepo] = useState<RepoBundle | null>(null)
   const [question, setQuestion] = useState('')
   const [thinking, setThinking] = useState(false)
-  const [user, setUser] = useState(new URLSearchParams(location.search).get('u') ?? '')
+  const qs = new URLSearchParams(location.search)
+  const [user, setUser] = useState(qs.get('r') ?? qs.get('u') ?? '')
   const [phase, setPhase] = useState<Phase>('idle')
   const [msg, setMsg] = useState('')
   const [facts, setFacts] = useState<Facts | null>(null)
@@ -28,18 +31,30 @@ function Main() {
 
   async function run(e: React.FormEvent) {
     e.preventDefault()
-    const login = user.trim().replace(/^@/, '')
-    if (!login) return
+    const target = parseTarget(user)
+    if (!target) return
     try {
       stop()
-      setPhase('fetching'); setMsg('Reading GitHub…'); setTtfa(null); setActive(-1)
-      const f = await loadFacts(login)
-      const script = introScript(f)
-      setFacts(f); setLines(script)
+      setPhase('fetching'); setMsg('Reading GitHub…'); setTtfa(null); setActive(-1); setTurns([]); setRepo(null); setFacts(null)
+      let script: string[]
+      if ('repo' in target) {
+        const [bundle, owner] = await Promise.all([
+          loadRepo(target.owner, target.repo),
+          loadFacts(target.owner).catch(() => null), // profile context is a bonus; rate limits must not block the repo
+        ])
+        setRepo(bundle); setFacts(owner)
+        script = repoIntro(bundle.facts)
+        history.replaceState(null, '', `?r=${target.owner}/${target.repo}`)
+      } else {
+        const f = await loadFacts(target.user)
+        setFacts(f)
+        script = introScript(f)
+        history.replaceState(null, '', `?u=${f.login}`)
+      }
+      setLines(script)
       setPhase('voice'); setMsg('Loading voice model (first run downloads ~65 MB)…')
       await loadVoice((p) => setMsg(`Loading voice model… ${p}%`))
       setPhase('speaking'); setMsg('')
-      history.replaceState(null, '', `?u=${f.login}`)
       await speak(script, setActive, setTtfa)
       setPhase('idle')
     } catch (err) {
@@ -50,7 +65,7 @@ function Main() {
   async function ask(e: React.FormEvent) {
     e.preventDefault()
     const q = question.trim()
-    if (!q || !facts || thinking) return
+    if (!q || (!facts && !repo) || thinking) return
     setQuestion(''); setThinking(true); stop()
     const idx = turns.length
     setTurns((t) => [...t, { q, a: '' }])
@@ -63,7 +78,15 @@ function Main() {
       const sp = startSpeaker(() => {}, (ms) => setTtfa(ms))
       const chunker = new SentenceChunker()
       let full = ''
-      for await (const d of answer(facts, history, q)) {
+      let stream: AsyncGenerator<string>
+      if (repo) {
+        const hits = repo.index.search(q, 4)
+        setTurns((t) => t.map((x, i) => (i === idx ? { ...x, src: [...new Set(hits.map(sourceLabel))] } : x)))
+        stream = answerRepo(buildRepoMessages(repo.facts, facts, history, q, hits))
+      } else {
+        stream = answer(facts!, history, q)
+      }
+      for await (const d of stream) {
         full += d
         setTurns((t) => t.map((x, i) => (i === idx ? { ...x, a: clean(full) } : x)))
         chunker.push(d).forEach(sp.push)
@@ -89,14 +112,14 @@ function Main() {
 
       <section className="hero">
         <Orb />
-        <h1>Hear a GitHub profile.</h1>
-        <p className="sub">Type a username. It reads the profile, then speaks it, all in your browser.</p>
+        <h1>Talk to GitHub.</h1>
+        <p className="sub">Type a username or owner/repo. It reads it, speaks it, and answers questions, all in your browser.</p>
         <form onSubmit={run} className="row">
           <input
             value={user}
             onChange={(e) => setUser(e.target.value)}
-            placeholder="github username"
-            aria-label="GitHub username"
+            placeholder="username or owner/repo"
+            aria-label="GitHub username or owner/repo"
             autoCapitalize="off"
             spellCheck={false}
           />
@@ -107,19 +130,31 @@ function Main() {
         {ttfa !== null && <p className="pill">first audio in {ttfa} ms</p>}
       </section>
 
-      {facts && (
+      {(facts || repo) && (
         <section className="grid">
           <div className="card terminal">
-            <h2>facts</h2>
-            <dl>
-              <dt>repos</dt><dd>{facts.ownRepos} original / {facts.publicRepos} public</dd>
-              <dt>stars</dt><dd>{facts.totalStars}</dd>
-              <dt>followers</dt><dd>{facts.followers}</dd>
-              <dt>prs</dt><dd>{facts.prs.total} opened / {facts.prs.merged} merged</dd>
-              <dt>recent</dt><dd>{facts.recent.commits} commits, {facts.recent.prsOpened} PRs across {facts.recent.reposTouched} repos</dd>
-              <dt>active 90d</dt><dd>{facts.activeRepos90d} repos</dd>
-              <dt>languages</dt><dd>{facts.languages.map(([l]) => l).join(', ') || '—'}</dd>
-            </dl>
+            <h2>{repo ? `${repo.facts.owner}/${repo.facts.name}` : 'facts'}</h2>
+            {repo ? (
+              <dl>
+                <dt>stars</dt><dd>{repo.facts.stars} · {repo.facts.forks} forks</dd>
+                <dt>language</dt><dd>{repo.facts.languages.map(([l, p]) => `${l} ${p}%`).join(', ') || '—'}</dd>
+                <dt>license</dt><dd>{repo.facts.license ?? 'none'}</dd>
+                <dt>people</dt><dd>{repo.facts.contributors.count}{repo.facts.contributors.capped ? '+' : ''} contributors</dd>
+                <dt>prs</dt><dd>{repo.facts.prs.total} opened / {repo.facts.prs.merged} merged</dd>
+                <dt>30d</dt><dd>{repo.facts.commits30d} commits</dd>
+                <dt>indexed</dt><dd>{repo.facts.docs.length} docs · {repo.index.chunks.length} chunks</dd>
+              </dl>
+            ) : facts && (
+              <dl>
+                <dt>repos</dt><dd>{facts.ownRepos} original / {facts.publicRepos} public</dd>
+                <dt>stars</dt><dd>{facts.totalStars}</dd>
+                <dt>followers</dt><dd>{facts.followers}</dd>
+                <dt>prs</dt><dd>{facts.prs.total} opened / {facts.prs.merged} merged</dd>
+                <dt>recent</dt><dd>{facts.recent.commits} commits, {facts.recent.prsOpened} PRs across {facts.recent.reposTouched} repos</dd>
+                <dt>active 90d</dt><dd>{facts.activeRepos90d} repos</dd>
+                <dt>languages</dt><dd>{facts.languages.map(([l]) => l).join(', ') || '—'}</dd>
+              </dl>
+            )}
           </div>
           <div className="card">
             <h2>narration</h2>
@@ -130,13 +165,13 @@ function Main() {
         </section>
       )}
 
-      {facts && (
+      {(facts || repo) && (
         <section className="chat">
           {turns.map((t, i) => (
-            <div className="turn" key={i}><q>{t.q}</q><p>{t.a || '…'}</p></div>
+            <div className="turn" key={i}><q>{t.q}</q><p>{t.a || '…'}</p>{t.src && <span className="src">from {t.src.join(' · ')}</span>}</div>
           ))}
           <form onSubmit={ask}>
-            <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={`Ask about ${facts.name}…`} aria-label="Ask a question" />
+            <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={`Ask about ${repo ? repo.facts.name : facts?.name}…`} aria-label="Ask a question" />
             <button className="primary" disabled={thinking}>{thinking ? '…' : 'Ask'}</button>
           </form>
         </section>

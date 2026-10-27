@@ -6,7 +6,9 @@ Hear a GitHub profile. Type a username, and gitvox reads the public profile and 
 - **Facts:** GitHub public REST API. Every number is computed in code, never by a model.
 - **Visual:** a sphere of cubes that distorts from the inside as words are spoken.
 
-Roadmap: talk back (VAD + small STT), grounded Q&A with a WebGPU LLM, repo mode with README retrieval, narration personas.
+Two modes from one box: `username` (profile) or `owner/repo` (repo mode: reads the README and up to 7 more docs, chunks them by heading, and retrieves with BM25; the owner's profile facts ride along as context). Deep links: `?u=name` and `?r=owner/repo`.
+
+Roadmap: talk back (VAD + small STT), narration personas.
 
 ```bash
 npm install
@@ -25,3 +27,5 @@ npm run dev
 | Qwen2.5-1.5B | 7/10 | 4/6 | 3/4 | ~650 ms | ~32 |
 
 Single runs, so treat ±1 question as noise. Gemma3-1B did not load in WebLLM. Superlatives ("most starred") are precomputed in code, because small models misread them from a list.
+
+`npm test` runs the retrieval tests (Node 22+).

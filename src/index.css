@@ -58,3 +58,4 @@ dt { color:var(--ink-3); } dd { margin:0; color:var(--ink); }
 .turn p { margin:4px 0 0; }
 .chat form { display:flex; gap:8px; }
 .chat input { flex:1; width:auto; font-family:var(--sans); font-size:1rem; }
+.src { display:block; margin-top:4px; font:400 .7rem var(--mono); color:var(--ink-3); }

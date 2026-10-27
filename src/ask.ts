@@ -1,5 +1,7 @@
 import type { Facts } from './github'
 import { chat, type Msg } from './llm'
+import type { RepoFacts } from './repo'
+import type { Hit } from './retrieval'
 
 const fmt = (n: number) => n.toLocaleString('en-US')
 
@@ -35,6 +37,7 @@ Rules:
 - Use ONLY the FACTS below. Never use outside knowledge about this person.
 - If the answer is not in the FACTS, say exactly that you don't have that information. Never guess or invent numbers, skills, employers or opinions.
 - Copy numbers exactly as written in the FACTS.
+- Refer to the person by name or as "they". Never guess anyone's gender.
 - Answer in 1 to 3 short spoken sentences. Plain prose only: no lists, no markdown, no emojis.`
 
 export function buildMessages(f: Facts, history: Msg[], question: string): Msg[] {
@@ -76,4 +79,60 @@ export const clean = (s: string) =>
 
 export async function* answer(f: Facts, history: Msg[], question: string, signal?: AbortSignal) {
   yield* chat(buildMessages(f, history, question), signal)
+}
+
+// ---- repo mode -------------------------------------------------------------
+
+export function repoSheet(r: RepoFacts): string {
+  const ago = (iso: string) => {
+    const d = Math.round((Date.now() - +new Date(iso)) / 864e5)
+    return d <= 1 ? 'today or yesterday' : d < 60 ? `${d} days ago` : `${Math.round(d / 30)} months ago`
+  }
+  return [
+    `REPO: ${r.owner}/${r.name}`,
+    `DESCRIPTION: ${r.description ?? 'not provided'}`,
+    `STARS: ${fmt(r.stars)}`,
+    `FORKS: ${fmt(r.forks)}`,
+    `OPEN ISSUES AND PRS: ${r.openIssues}`,
+    `LICENSE: ${r.license ?? 'none declared'}`,
+    `MAIN LANGUAGE: ${r.languages[0]?.[0] ?? 'unknown'}`,
+    `LANGUAGE SHARE: ${r.languages.map(([l, p]) => `${l} ${p}%`).join(', ') || 'unknown'}`,
+    `TOPICS: ${r.topics.join(', ') || 'none'}`,
+    `CONTRIBUTORS: ${r.contributors.count}${r.contributors.capped ? ' or more' : ''}${r.contributors.top.length ? `; top: ${r.contributors.top.map(([l, n]) => `${l} (${n} commits)`).join(', ')}` : ''}`,
+    `PULL REQUESTS: ${r.prs.total} opened, ${r.prs.merged} merged (all time)`,
+    `COMMITS IN LAST 30 DAYS: ${r.commits30d}${r.commits30d >= 100 ? ' or more' : ''}`,
+    `CREATED: ${new Date(r.createdAt).getFullYear()}`,
+    `LAST PUSH: ${ago(r.pushedAt)}${r.archived ? ' (repo is archived)' : ''}`,
+    `HOMEPAGE: ${r.homepage ?? 'none'}`,
+    `DOC FILES INDEXED: ${r.docs.join(', ')}`,
+    `NOT AVAILABLE (say you don't have it): lifetime commit total, source code contents, anything not in the excerpts.`,
+  ].join('\n')
+}
+
+const REPO_RULES = `You are the voice of one GitHub repository, answering questions for a developer who is evaluating it.
+Rules:
+- Use ONLY the REPO FACTS, OWNER FACTS and the EXCERPTS in the user's message. Never use outside knowledge about this project.
+- If the excerpts do not contain the answer, say the docs don't cover it. Never invent commands, flags, options, APIs, versions or numbers.
+- Copy commands, names and numbers exactly as written.
+- Refer to the person by name or as "they". Never guess anyone's gender.
+- Answer in 1 to 4 short spoken sentences. Plain prose only: no lists, no markdown, no emojis.`
+
+export function formatExcerpts(hits: Hit[]): string {
+  return hits.map((h, i) => `[${i + 1}] ${h.chunk.source}${h.chunk.heading ? ` › ${h.chunk.heading}` : ''}\n${h.chunk.text.slice(0, 1100)}`).join('\n\n')
+}
+
+export const sourceLabel = (h: Hit) => `${h.chunk.source}${h.chunk.heading ? ` › ${h.chunk.heading.split(' › ').slice(-1)[0]}` : ''}`
+
+/** Stable system prefix (repo + owner facts); per-question excerpts ride in the user turn. */
+export function buildRepoMessages(repo: RepoFacts, owner: Facts | null, history: Msg[], question: string, hits: Hit[]): Msg[] {
+  const system = `${REPO_RULES}\n\nREPO FACTS:\n${repoSheet(repo)}${owner ? `\n\nOWNER FACTS (the person behind this repo):\n${factsSheet(owner)}` : ''}`
+  return [
+    { role: 'system', content: system },
+    ...history.slice(-6),
+    { role: 'user', content: `EXCERPTS:\n${formatExcerpts(hits)}\n\nQUESTION: ${question}` },
+  ]
+}
+
+export async function* answerRepo(msgs: Msg[], signal?: AbortSignal) {
+  yield* chat(msgs, signal)
 }
