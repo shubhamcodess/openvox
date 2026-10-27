@@ -55,11 +55,18 @@ export class SentenceChunker {
     this.buf += t
     const out: string[] = []
     for (;;) {
-      const re = /[.!?](?:["')\]]*)\s+/g
+      const re = /[.!?](?:["')\]]*)\s+|\n+/g
       let m: RegExpExecArray | null
       let cut = -1
       while ((m = re.exec(this.buf))) {
+        const before = this.buf.slice(0, m.index + 1)
+        if (/(?:\b(?:e\.g|i\.e|etc|vs|approx|Mr|Mrs|Dr|No)|(?:^|\s)(?:\d{1,2}|[A-Z]))\.$/i.test(before)) continue // abbreviation or list number, not a sentence end
         if (m.index + m[0].length >= 24) { cut = m.index + m[0].length; break }
+      }
+      // Long run with no sentence end (lists, run-ons): cut at the last clause break so audio keeps flowing.
+      if (cut < 0 && this.buf.length > 150) {
+        const soft = [...this.buf.matchAll(/[,;:]\s/g)].map((x) => x.index! + 2).filter((i) => i >= 40).pop()
+        if (soft) cut = soft
       }
       if (cut < 0) break
       out.push(clean(this.buf.slice(0, cut)))

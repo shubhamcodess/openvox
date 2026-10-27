@@ -8,6 +8,8 @@ Hear a GitHub profile. Type a username, and gitvox reads the public profile and 
 
 Two modes from one box: `username` (profile) or `owner/repo` (repo mode: reads the README and up to 7 more docs, chunks them by heading, and retrieves with BM25; the owner's profile facts ride along as context). Deep links: `?u=name` and `?r=owner/repo`.
 
+**Content-aware speech:** the screen shows the original text, but Phonon gets a speakable version (`src/speakable.ts`): links become "this link", shell commands become "the command shown on screen", acronyms are spelled or pronounced (N P M, Jason, yammel), and file paths, versions and symbols are read naturally. Add words to the tables at the top of that file.
+
 Roadmap: talk back (VAD + small STT), narration personas.
 
 ```bash

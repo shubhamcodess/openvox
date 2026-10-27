@@ -1,4 +1,5 @@
 import { PhononTTS } from 'phonon-tts'
+import { toSpeech } from './speakable'
 
 let tts: PhononTTS | null = null
 let ctx: AudioContext | null = null
@@ -66,8 +67,11 @@ export function startSpeaker(
         continue
       }
       const idx = i++
+      const spoken = toSpeech(sentence)
+      if (!/[a-z0-9]/i.test(spoken)) continue
+      if (import.meta.env.DEV) ((window as any).__tts ??= []).push(spoken)
       let started = false
-      for await (const pcm of engine.stream(sentence, { signal })) {
+      for await (const pcm of engine.stream(spoken, { signal })) {
         const buf = ctx.createBuffer(1, pcm.length, engine.sampleRate)
         buf.getChannelData(0).set(pcm)
         const src = ctx.createBufferSource()
