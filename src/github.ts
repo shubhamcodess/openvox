@@ -95,7 +95,7 @@ export async function loadFacts(login: string): Promise<Facts> {
     ownRepos: own.length,
     totalStars: own.reduce((s, r) => s + r.stars, 0),
     languages: [...langCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5),
-    topRepos: [...own].sort((a, b) => b.stars - a.stars).slice(0, 5),
+    topRepos: [...own].sort((a, b) => b.stars - a.stars).slice(0, 8),
     activeRepos90d: own.filter((r) => +new Date(r.pushedAt) > cutoff).length,
     recent: {
       events: events.length,

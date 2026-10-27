@@ -49,3 +49,12 @@ dt { color:var(--ink-3); } dd { margin:0; color:var(--ink); }
 .script { margin:0; padding:0; list-style:none; display:grid; gap:8px; }
 .script li { color:var(--ink-3); transition:color .2s; }
 .script li.on { color:var(--ink); border-left:2px solid var(--cut); padding-left:12px; margin-left:-14px; }
+
+.tbl { width:100%; border-collapse:collapse; font:400 .75rem/1.8 var(--mono); }
+.tbl th { text-align:left; color:var(--ink-3); font-weight:400; padding-right:16px; }
+.tbl td { padding-right:16px; white-space:nowrap; }
+.chat { margin-top:48px; display:grid; gap:12px; }
+.turn q { display:block; color:var(--ink-3); font:400 .8rem var(--mono); quotes:none; }
+.turn p { margin:4px 0 0; }
+.chat form { display:flex; gap:8px; }
+.chat input { flex:1; width:auto; font-family:var(--sans); font-size:1rem; }
