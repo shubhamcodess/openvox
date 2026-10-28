@@ -23,7 +23,7 @@ export function loadStt(onProgress?: (pct: number) => void): Promise<void> {
       }
       if (m.id != null) pending.delete(m.id)
     }
-    worker.postMessage({ type: 'load', model: STT_MODEL })
+    worker.postMessage({ type: 'load', model: STT_MODEL, ortBase: new URL(import.meta.env.BASE_URL + 'ort/', document.baseURI).href })
   })
   return ready
 }

@@ -27,6 +27,8 @@ const REDEMPTION_MS = 700
 const GRACE_MS = 1400 // used until the first transcript says whether the sentence sounds finished; see patience()
 const NO_SPEECH_MS = 9000
 
+const VAD_BASE = new URL(import.meta.env.BASE_URL + 'vad/', document.baseURI).href
+
 let analyser: AnalyserNode | null = null
 /** Live mic analyser for the waveform; null when not listening. */
 export const micAnalyser = () => analyser
@@ -95,8 +97,8 @@ export async function startListening(o: ListenOptions): Promise<{ stop(): void }
     vad = await MicVAD.new({
       model: 'v5',
       audioContext: ctx,
-      baseAssetPath: '/vad/',
-      onnxWASMBasePath: '/vad/',
+      baseAssetPath: VAD_BASE,
+      onnxWASMBasePath: VAD_BASE,
       getStream: async () => mic,
       pauseStream: async () => {},
       resumeStream: async () => mic,

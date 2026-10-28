@@ -20,6 +20,7 @@ const rawRuntime: Plugin = {
 }
 
 export default defineConfig({
+  base: './', // relative, so it works under any GitHub Pages path
   plugins: [react(), rawRuntime],
   optimizeDeps: { exclude: ['phonon-tts'] },
   worker: { format: 'es' },

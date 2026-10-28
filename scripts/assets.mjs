@@ -7,5 +7,5 @@ const copy = (from, to, pick) => {
   for (const f of readdirSync(from)) if (pick.test(f)) cpSync(`${from}/${f}`, `${to}/${f}`)
 }
 copy(`${vad}/dist`, 'public/vad', /^(silero_vad_v5\.onnx|vad\.worklet\.bundle\.min\.js)$/)
-copy(`${vad}/node_modules/onnxruntime-web/dist`, 'public/vad', /^ort-wasm-simd-threaded(\.jsep|\.asyncify|\.jspi)?\.(wasm|mjs)$/)
-copy('node_modules/onnxruntime-web/dist', 'public/ort', /^ort-wasm-simd-threaded(\.jsep|\.asyncify|\.jspi)?\.(wasm|mjs)$/)
+copy(`${vad}/node_modules/onnxruntime-web/dist`, 'public/vad', /^ort-wasm-simd-threaded(\.asyncify)?\.(wasm|mjs)$/)
+copy('node_modules/onnxruntime-web/dist', 'public/ort', /^ort-wasm-simd-threaded\.asyncify\.(wasm|mjs)$/)

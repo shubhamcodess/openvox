@@ -1,8 +1,7 @@
 import { env, pipeline } from '@huggingface/transformers'
 
 env.allowLocalModels = false
-// serve the ONNX runtime from our own origin (scripts/assets.mjs), never a CDN
-env.backends.onnx.wasm!.wasmPaths = '/ort/'
+// the ONNX runtime is served from our own origin (scripts/assets.mjs), never a CDN
 
 let asr: any = null
 
@@ -10,6 +9,7 @@ self.onmessage = async (e: MessageEvent) => {
   const m = e.data
   try {
     if (m.type === 'load') {
+      env.backends.onnx.wasm!.wasmPaths = m.ortBase // absolute, resolved by the page: a worker would resolve a relative path against itself
       asr = await pipeline('automatic-speech-recognition', m.model, {
         device: 'wasm',
         dtype: 'q8',
