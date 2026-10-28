@@ -1,4 +1,4 @@
-export const STT_MODEL = 'onnx-community/moonshine-tiny-ONNX'
+export const STT_MODEL = 'onnx-community/moonshine-base-ONNX'
 
 let worker: Worker | null = null
 let ready: Promise<void> | null = null

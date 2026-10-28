@@ -10,7 +10,13 @@ Two modes from one box: `username` (profile) or `owner/repo` (repo mode: reads t
 
 **Content-aware speech:** the screen shows the original text, but Phonon gets a speakable version (`src/speakable.ts`): links become "this link", shell commands become "the command shown on screen", acronyms are spelled or pronounced (N P M, Jason, yammel), and file paths, versions and symbols are read naturally. Add words to the tables at the top of that file.
 
-Talk back: tap the mic. Everything runs on-device: the browser cleans the signal (echo cancel, noise suppression), Silero VAD finds speech with a 400 ms pre-roll, and it waits through thinking pauses (about 1.6 s after a finished sentence, up to about 3.5 s after one that trails off) before sending. The audio is high-passed, trimmed, levelled and transcribed by Moonshine-tiny in a worker; fillers, stutters and phantom "thank you" transcripts are removed before the LLM sees it. Starting to speak interrupts the voice.
+Talk back: tap the mic. Everything runs on-device: the browser cleans the signal (echo cancel, noise suppression), Silero VAD finds speech with a 400 ms pre-roll, and it waits through thinking pauses (about 1.6 s after a finished sentence, up to about 3.5 s after one that trails off) before sending. The audio is high-passed, trimmed, levelled and transcribed by Moonshine-base in a worker; fillers, stutters and phantom "thank you" transcripts are removed before the LLM sees it. Starting to speak interrupts the voice.
+
+**How it answers:**
+- **Profile mode** indexes every original repo as a small card (up to 100), the profile README, and the READMEs of the top starred repos plus the most recently pushed one. After loading, the repo box becomes a picker of all of them; picking one switches to repo mode.
+- **Routing:** the question is classified first. Employer and location questions are answered straight from the profile. Things GitHub cannot show (comments, salary, lifetime commits, work history) get a direct "I can't see that" plus what can be covered. Questions about the person or their repo list use the facts sheet alone, and "tell me about them" gets the openings of the top READMEs. Anything about content is retrieved.
+- **Retrieval:** BM25 over heading-aware chunks with synonym expansion ("set up" finds Installation), a boost for a repo named in the question, a relevance floor so weak matches are dropped, and short follow-ups borrow the previous question.
+- **Conversation:** refusals are kept out of the history, because a small model copies its own earlier answers. Prompts describe style in rules, never with an example, for the same reason.
 
 Roadmap: narration personas.
 

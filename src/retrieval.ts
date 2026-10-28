@@ -1,4 +1,12 @@
-export interface Chunk { id: number; source: string; heading: string; text: string; weight?: number }
+export interface Chunk {
+  id: number
+  source: string
+  heading: string
+  text: string
+  weight?: number
+  /** Which repo this belongs to (profile index only); lets a question that names a repo favour it. */
+  tag?: string
+}
 
 const MAX = 900
 
@@ -54,6 +62,45 @@ export function tokenize(s: string): string[] {
 
 export interface Hit { chunk: Chunk; score: number }
 
+// Questions and docs rarely use the same words: "how do I set it up" lives under "Installation".
+const SYNONYMS: Record<string, string[]> = {
+  install: ['setup', 'getting', 'started', 'quickstart', 'installation', 'requirements', 'prerequisites'],
+  set: ['setup', 'install', 'installation', 'getting', 'started'],
+  begin: ['getting', 'started', 'quickstart', 'usage'],
+  setup: ['install', 'getting', 'started', 'quickstart', 'configuration'],
+  start: ['getting', 'started', 'quickstart', 'usage', 'run'],
+  use: ['usage', 'example', 'examples', 'api'],
+  run: ['usage', 'start', 'command', 'cli'],
+  connect: ['integration', 'integrate', 'configure', 'configuration', 'mcp', 'client'],
+  integrate: ['integration', 'connect', 'plugin', 'configure'],
+  config: ['configuration', 'options', 'settings', 'environment'],
+  configure: ['configuration', 'options', 'settings'],
+  option: ['configuration', 'settings', 'flags', 'parameters'],
+  contribute: ['contributing', 'contribution', 'development', 'pull'],
+  licence: ['license'],
+  license: ['licence', 'copyright', 'mit', 'apache'],
+  work: ['feature', 'architecture', 'overview', 'design'],
+  feature: ['overview', 'highlights', 'capabilities'],
+  limitation: ['known', 'issues', 'caveats', 'roadmap'],
+  problem: ['motivation', 'why', 'overview', 'introduction'],
+  test: ['testing', 'tests', 'benchmark'],
+  deploy: ['deployment', 'hosting', 'production', 'docker'],
+  secure: ['security', 'privacy'],
+  built: ['stack', 'architecture', 'technology', 'dependencies'],
+  stack: ['built', 'technology', 'dependencies', 'architecture'],
+  language: ['written', 'stack', 'built'],
+  worked: ['experience', 'company', 'role', 'currently'],
+  experience: ['worked', 'company', 'role', 'skills'],
+  skill: ['stack', 'technologies', 'languages', 'tools'],
+}
+
+export interface SearchOptions {
+  /** Chunks tagged with one of these repo names score higher. */
+  boost?: Set<string>
+  /** Keep the opening chunk in the results (right for a README, wrong for a mixed profile index). Default true. */
+  pinFirst?: boolean
+}
+
 /** Okapi BM25 over chunks; the heading path is indexed with the text so section titles count. */
 export class Bm25 {
   private tf: Map<string, number>[] = []
@@ -76,9 +123,13 @@ export class Bm25 {
     this.avg = this.len.reduce((s, n) => s + n, 0) / Math.max(1, this.len.length)
   }
 
-  search(query: string, k = 4): Hit[] {
+  search(query: string, k = 4, opts: SearchOptions = {}): Hit[] {
     const N = this.chunks.length
-    const q = [...new Set(tokenize(query))]
+    const base = [...new Set(tokenize(query))]
+    // synonym terms count half as much as the words actually asked
+    const weighted = new Map<string, number>(base.map((t) => [t, 1]))
+    for (const t of base) for (const syn of SYNONYMS[t] ?? []) for (const x of tokenize(syn)) if (!weighted.has(x)) weighted.set(x, 0.5)
+    const q = [...weighted.keys()]
     const hits: Hit[] = []
     this.chunks.forEach((chunk, i) => {
       let score = 0
@@ -86,16 +137,26 @@ export class Bm25 {
         const f = this.tf[i].get(t)
         if (!f) continue
         const idf = Math.log(1 + (N - (this.df.get(t) ?? 0) + 0.5) / ((this.df.get(t) ?? 0) + 0.5))
-        score += (idf * f * (this.k1 + 1)) / (f + this.k1 * (1 - this.b + (this.b * this.len[i]) / this.avg))
+        score += (weighted.get(t) ?? 1) * ((idf * f * (this.k1 + 1)) / (f + this.k1 * (1 - this.b + (this.b * this.len[i]) / this.avg)))
       }
-      if (score > 0) hits.push({ chunk, score: score * (chunk.weight ?? 1) })
+      if (score > 0) hits.push({ chunk, score: score * (chunk.weight ?? 1) * (chunk.tag && opts.boost?.has(chunk.tag) ? 2.5 : 1) })
     })
     hits.sort((a, b) => b.score - a.score)
-    const top = hits.slice(0, k)
+    const seen = new Map<string, number>()
+    const top: Hit[] = []
+    const floor = (hits[0]?.score ?? 0) * 0.35 // a weak match is worse than none: it gives a small model something to latch onto
+    for (const h of hits) {
+      if (h.score < floor) break // at most two chunks from one section, so one long section cannot crowd out the rest
+      const key = `${h.chunk.source}|${h.chunk.heading}`
+      if ((seen.get(key) ?? 0) >= 2) continue
+      seen.set(key, (seen.get(key) ?? 0) + 1)
+      top.push(h)
+      if (top.length === k) break
+    }
     // Always keep the opening chunk (the overview) in view: "what is this / what problem does it solve"
     // questions share almost no words with the text that answers them.
     const first = this.chunks[0]
-    if (first && !top.some((h) => h.chunk.id === first.id)) {
+    if (first && opts.pinFirst !== false && !top.some((h) => h.chunk.id === first.id)) {
       if (top.length >= k) top.pop()
       top.unshift({ chunk: first, score: 0 })
     }

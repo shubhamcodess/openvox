@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Field from './Field'
 import Lyrics, { type Line } from './Lyrics'
 import Md from './Md'
@@ -6,14 +6,17 @@ import { loadFacts, takeRateLimited, type Facts } from './github'
 import { introScript, repoIntro } from './narrate'
 import { loadRepo, parseTarget, type RepoBundle } from './repo'
 import { loadVoice, startSpeaker, stop } from './speech'
-import { answer, answerRepo, buildRepoMessages, sourceLabel, SentenceChunker, clean } from './ask'
+import { factReply, gapReply, intentOf, retrievalQuery } from './convo'
+import { answerMsgs, buildMessages, buildRepoMessages, sourceLabel, SentenceChunker, clean } from './ask'
+import { buildProfileIndex, mentionedRepos, portraitHits } from './profile'
 import { DEFAULT_MODEL, loadModel, type Msg } from './llm'
 import Eval from './Eval'
 import Wave from './Wave'
 import { startListening, type ListenState } from './listen'
 
 type Phase = 'idle' | 'fetching' | 'voice' | 'speaking' | 'error'
-type Turn = { q?: string; a: string; src?: { label: string; text: string }[] }
+/** `gap`: a canned "GitHub can't tell" reply; shown and spoken but never fed back to the model, which would copy it. */
+type Turn = { q?: string; a: string; src?: { label: string; text: string }[]; gap?: boolean }
 
 export default function App() {
   if (new URLSearchParams(location.search).has('eval')) return <Eval />
@@ -48,6 +51,7 @@ function Main() {
   const [listening, setListening] = useState(false)
   const [cue, setCue] = useState('')
   const [log, setLog] = useState(false)
+  const pindex = useMemo(() => (facts && !repo ? buildProfileIndex(facts) : null), [facts, repo])
 
   // keep the thread pinned to the bottom unless the reader scrolled up
   useEffect(() => {
@@ -69,15 +73,19 @@ function Main() {
     if (t && 'repo' in t) { setOwner(t.owner); setRepoName(t.repo) } else setOwner(v)
   }
 
-  async function run(e: React.FormEvent) {
+  function run(e: React.FormEvent) {
     e.preventDefault()
     const target = parseTarget(repoName.trim() ? `${owner.trim()}/${repoName.trim()}` : owner)
-    if (!target) return
+    if (target) void go(target)
+  }
+
+  async function go(target: NonNullable<ReturnType<typeof parseTarget>>) {
     let script: string[] = []
     try {
       hush()
       setPhase('fetching'); setMsg('reading github…'); setTtfa(null); setLive(null); setLines([]); setTurns([]); setCue('')
       if ('repo' in target) {
+        setOwner(target.owner); setRepoName(target.repo)
         const [bundle, o] = await Promise.all([
           loadRepo(target.owner, target.repo),
           loadFacts(target.owner).catch(() => null), // profile context is a bonus; rate limits must not block the repo
@@ -113,7 +121,7 @@ function Main() {
     setQuestion(''); setCue(q); setThinking(true); stop(); setPhase('idle'); setLive(null)
     const ac = new AbortController()
     abort.current = ac
-    const prior = turns.filter((t) => t.q)
+    const prior = turns.filter((t) => t.q && !t.gap)
     const idx = turns.length
     setTurns((t) => [...t, { q, a: '' }])
     const patch = (p: Partial<Turn>) => setTurns((t) => t.map((x, i) => (i === idx ? { ...x, ...p } : x)))
@@ -125,16 +133,30 @@ function Main() {
       if (ac.signal.aborted) return
       const history: Msg[] = prior.flatMap((t) => [{ role: 'user' as const, content: t.q! }, { role: 'assistant' as const, content: clean(t.a) }])
       const sp = startSpeaker(onSentence(false), setTtfa)
+      const gap = (!repo && facts ? factReply(q, facts) : null) ?? gapReply(q, repo ? ['what it does', 'how to get started', 'how active it is'] : ['their top projects', 'their languages', 'what they have been working on lately'])
+      if (gap) {
+        patch({ a: gap, gap: true })
+        gap.split(/(?<=[.!?])\s+/).forEach(sp.push)
+        sp.end()
+        await sp.done
+        return
+      }
       const chunker = new SentenceChunker()
       let full = ''
-      let stream: AsyncGenerator<string>
+      const query = retrievalQuery(q, history)
+      let hits: ReturnType<NonNullable<typeof pindex>['search']>
+      let msgs: Msg[]
       if (repo) {
-        const hits = repo.index.search(q, 4)
-        patch({ src: hits.map((h) => ({ label: sourceLabel(h), text: h.chunk.text })) })
-        stream = answerRepo(buildRepoMessages(repo.facts, facts, history, q, hits), ac.signal)
+        hits = repo.index.search(query, 4)
+        msgs = buildRepoMessages(repo.facts, facts, history, q, hits)
       } else {
-        stream = answer(facts!, history, q, ac.signal)
+        const named = mentionedRepos(query, facts!.repos)
+        const intent = intentOf(q, mentionedRepos(q, facts!.repos).size > 0)
+        hits = intent === 'broad' ? portraitHits(pindex!) : intent === 'content' ? pindex!.search(query, 4, { boost: named, pinFirst: false }) : []
+        msgs = buildMessages(facts!, history, q, hits)
       }
+      patch({ src: hits.map((h) => ({ label: sourceLabel(h), text: h.chunk.text })) })
+      const stream = answerMsgs(msgs, ac.signal)
       for await (const d of stream) {
         full += d
         patch({ a: display(full) })
@@ -196,6 +218,10 @@ function Main() {
         ]
       : []
 
+  const picks = facts && owner.trim().toLowerCase() === facts.login.toLowerCase() ? facts.repos : []
+  const starters = repo
+    ? ['What does it do?', 'How do I get started?', 'Is it actively maintained?', 'How can I contribute?']
+    : ['What are they known for?', 'What are they working on lately?', 'Which repos should I look at first?', 'What languages do they use?']
   const talking = thinking || phase === 'speaking'
 
   return (
@@ -212,7 +238,22 @@ function Main() {
             <span className="at">github.com/</span>
             <input value={owner} onChange={(e) => splitPaste(e.target.value)} placeholder="owner" aria-label="GitHub user or org" autoCapitalize="off" spellCheck={false} />
             <span className="slash">/</span>
-            <input value={repoName} onChange={(e) => setRepoName(e.target.value.replace(/\s/g, ''))} placeholder="repo (optional)" aria-label="Repository (optional)" autoCapitalize="off" spellCheck={false} />
+            <input
+              value={repoName}
+              list="gv-repos"
+              onChange={(e) => {
+                const v = e.target.value.replace(/\s/g, '')
+                setRepoName(v)
+                if (picks.some((r) => r.name === v)) void go({ owner: facts!.login, repo: v }) // picked from the list
+              }}
+              placeholder={picks.length ? `pick one of ${picks.length} repos` : 'repo (optional)'}
+              aria-label="Repository (optional)"
+              autoCapitalize="off"
+              spellCheck={false}
+            />
+            <datalist id="gv-repos">
+              {picks.map((r) => <option key={r.name} value={r.name} label={`${r.stars ? `★ ${r.stars} · ` : ''}${r.description ?? r.language ?? ''}`.slice(0, 90)} />)}
+            </datalist>
             <button className="go" disabled={busy || !owner.trim()} aria-label="Load">{busy ? <span className="spin" /> : '→'}</button>
           </form>
           {loaded && (
@@ -239,6 +280,11 @@ function Main() {
             </div>
           )}
           {thinking && live === null && !msg && <p className="dots stage-dots"><i /><i /><i /></p>}
+          {loaded && !log && turns.length <= 1 && !thinking && !listening && phase !== 'fetching' && (
+            <div className="starters">
+              {starters.map((t) => <button key={t} type="button" onClick={() => send(t)}>{t}</button>)}
+            </div>
+          )}
         </section>
 
         <form className="dock" onSubmit={(e) => { e.preventDefault(); send(question) }}>

@@ -1,6 +1,7 @@
 import type { Facts } from './github'
 import { chat, type Msg } from './llm'
 import type { RepoFacts } from './repo'
+import { trimHistory } from './convo'
 import type { Hit } from './retrieval'
 
 const fmt = (n: number) => n.toLocaleString('en-US')
@@ -24,11 +25,12 @@ export function factsSheet(f: Facts): string {
     `PULL REQUESTS: ${f.prs.total} opened, ${f.prs.merged} merged (all time, public)`,
     `RECENT ACTIVITY (last ~90 days, public events): ${f.recent.commits} commits, ${f.recent.prsOpened} PRs opened, across ${f.recent.reposTouched} repos`,
     `REPOS PUSHED IN LAST 90 DAYS: ${f.activeRepos90d}`,
-    `ALL TOP REPOS, MOST STARRED FIRST:`,
-    ...f.topRepos.map((r) => `- ${r.name} (${r.stars} stars, ${r.language ?? 'n/a'}): ${r.description ?? 'no description'}`),
+    `REPOS, MOST STARRED FIRST (${Math.min(f.repos.length || f.topRepos.length, 12)} of ${f.ownRepos}):`,
+    ...(f.repos.length ? f.repos : f.topRepos).slice(0, 12).map((r) => `- ${r.name} (${r.stars} stars, ${r.language ?? 'n/a'}${r.topics.length ? `, topics: ${r.topics.slice(0, 4).join('/')}` : ''}): ${r.description ?? 'no description'}`),
   ]
-  L.push(`NOT AVAILABLE (say you don't have it): lifetime commit total, salary, employer unless COMPANY is given, skills or experience not listed above, private repos.`)
-  if (f.profileReadme) L.push(`PROFILE README EXCERPT: ${f.profileReadme}`)
+  const recent = [...f.repos].sort((a, b) => +new Date(b.pushedAt) - +new Date(a.pushedAt)).slice(0, 3)
+  if (recent.length) L.push(`MOST RECENTLY PUSHED: ${recent.map((r) => r.name).join(', ')}`)
+  L.push(`NOT AVAILABLE (say you don't have it): comments, issues or reviews they wrote, lifetime commit total (RECENT ACTIVITY covers only the last 90 days), salary, past employers (only COMPANY is known), skill levels, private repos, anything off GitHub.`)
   return L.join('\n')
 }
 
@@ -36,25 +38,37 @@ export function factsSheet(f: Facts): string {
 const SPOKEN = `You are talking out loud on a voice call. Your words go straight to a text-to-speech voice, so say exactly what a friendly, knowledgeable person would say in conversation.
 - Talk naturally: contractions, short sentences (under 20 words), 2 to 4 sentences in total. Start with the answer. No filler openers like "Sure" or "Great question".
 - Never produce anything that is meant to be read on a screen: no lists, bullets, numbered or lettered steps, headings, markdown, emojis, parentheses, URLs, file paths, code or shell commands.
-- If the answer is a procedure, walk through it in plain speech ("First you clone the repo, then you install the dependencies and build it."), and say the exact commands are on screen below. Never read a command or a link aloud.
+- If the answer is a procedure, walk through the real steps from the excerpts in plain speech, and say the exact commands are on screen below. If the docs have no setup steps, say the docs don't cover it. Never read a command or a link aloud.
 - Say a project by its plain name with the dashes dropped, and a person by their name, never their @handle.
-- Never mention "the facts", "the excerpts" or "the sources". Just say it, or say you don't know.
-Tone example only (different project, never reuse its wording or details), for "How do I set it up?": "It's a quick setup. You grab the code, install what it needs, and start it with one command. The exact commands are on your screen below."`
+- Never mention "the facts", "the excerpts" or "the sources". Just say it, or say you don't know.`
 
-const RULES = `You are the voice of a GitHub profile, answering questions about one developer for a recruiter or fellow developer.
-Rules:
-- Use ONLY the FACTS below. Never use outside knowledge about this person.
-- If the answer is not in the FACTS, say exactly that you don't have that information. Never guess or invent numbers, skills, employers or opinions.
-- Copy numbers exactly as written in the FACTS.
-- Refer to the person by name or as "they". Never guess anyone's gender.
+const HOW = (subject: string) => `You are gitvox, a voice that knows one GitHub ${subject} well and talks about it with a recruiter or a fellow developer.
+How to answer:
+1. Understand what was asked and answer exactly that in your first sentence.
+2. Ground everything in the CONTEXT below. Names, numbers and claims must come from it. Copy numbers exactly. Never use outside knowledge.
+3. For list questions ("what repos do they have"), name up to four of the most relevant by plain name, say how many there are in total, and offer to go deeper on one.
+4. If the context does not contain the answer, say so in one short sentence, then offer the closest thing you do know. Never invent.
+5. For broad questions like "tell me about them" or "what do they do", give a quick portrait: what they build, what they are known for, what they are working on lately.
+6. For questions about a skill or technology ("are they experienced with X", "do they know X"), look for X in their repos, languages and topics. If it is there, say where. If it is not, say you don't see X in their public work. Never rate skill levels or say someone is good at something.
+7. This is a conversation. "It", "that one" and "them" refer to what was just discussed. Never repeat an earlier answer; if asked again, add a new detail or say what else you could cover.
+8. Now and then, not every turn, end with a short offer of what you could tell them next.
+9. Refer to people by name or as "they". Never guess anyone's gender.`
+
+const RULES = `${HOW('profile')}
 
 ${SPOKEN}`
 
-export function buildMessages(f: Facts, history: Msg[], question: string): Msg[] {
+// Said last, because that is the part a small model remembers: excerpts full of lists make it answer with a list.
+const REMINDER = `Answer in two to four short spoken sentences, as plain talk. No lists, no step labels, no colons, no code. Use only the context above.`
+
+const withContext = (hits: Hit[], question: string) =>
+  `${hits.length ? `EXCERPTS:\n${formatExcerpts(hits)}\n\n` : ''}QUESTION: ${question}\n\n${REMINDER}`
+
+export function buildMessages(f: Facts, history: Msg[], question: string, hits: Hit[] = []): Msg[] {
   return [
-    { role: 'system', content: `${RULES}\n\nFACTS:\n${factsSheet(f)}` },
-    ...history.slice(-6),
-    { role: 'user', content: question },
+    { role: 'system', content: `${RULES}\n\nCONTEXT (facts about the profile, then per-question excerpts):\n${factsSheet(f)}` },
+    ...trimHistory(history),
+    { role: 'user', content: withContext(hits, question) },
   ]
 }
 
@@ -92,11 +106,7 @@ export class SentenceChunker {
 }
 
 export const clean = (s: string) =>
-  s.replace(/<\/?think>/g, '').replace(/[*_`#>]+/g, '').replace(/\p{Extended_Pictographic}/gu, '').replace(/\s+/g, ' ').trim()
-
-export async function* answer(f: Facts, history: Msg[], question: string, signal?: AbortSignal) {
-  yield* chat(buildMessages(f, history, question), signal)
-}
+  s.replace(/<\/?think>/g, '').replace(/\s*\([^)]*\)/g, '').replace(/[*_`#>]+/g, '').replace(/\p{Extended_Pictographic}/gu, '').replace(/\s+/g, ' ').trim()
 
 // ---- repo mode -------------------------------------------------------------
 
@@ -126,12 +136,8 @@ export function repoSheet(r: RepoFacts): string {
   ].join('\n')
 }
 
-const REPO_RULES = `You are the voice of one GitHub repository, answering questions for a developer who is evaluating it.
-Rules:
-- Use ONLY the REPO FACTS, OWNER FACTS and the EXCERPTS in the user's message. Never use outside knowledge about this project.
-- If the excerpts do not contain the answer, say the docs don't cover it. Never invent commands, flags, options, APIs, versions or numbers.
-- Copy names and numbers exactly as written.
-- Refer to the person by name or as "they". Never guess anyone's gender.
+const REPO_RULES = `${HOW('repository')}
+10. For this repository the CONTEXT is REPO FACTS, OWNER FACTS and the EXCERPTS from its docs. If the excerpts do not cover something, say the docs don't cover it. Never invent commands, flags, options, APIs, versions or numbers.
 
 ${SPOKEN}`
 
@@ -146,11 +152,11 @@ export function buildRepoMessages(repo: RepoFacts, owner: Facts | null, history:
   const system = `${REPO_RULES}\n\nREPO FACTS:\n${repoSheet(repo)}${owner ? `\n\nOWNER FACTS (the person behind this repo):\n${factsSheet(owner)}` : ''}`
   return [
     { role: 'system', content: system },
-    ...history.slice(-6),
-    { role: 'user', content: `EXCERPTS:\n${formatExcerpts(hits)}\n\nQUESTION: ${question}` },
+    ...trimHistory(history),
+    { role: 'user', content: withContext(hits, question) },
   ]
 }
 
-export async function* answerRepo(msgs: Msg[], signal?: AbortSignal) {
+export async function* answerMsgs(msgs: Msg[], signal?: AbortSignal) {
   yield* chat(msgs, signal)
 }

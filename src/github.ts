@@ -7,6 +7,7 @@ export interface Repo {
   language: string | null
   pushedAt: string
   fork: boolean
+  topics: string[]
 }
 
 export interface Facts {
@@ -22,6 +23,10 @@ export interface Facts {
   totalStars: number
   languages: [string, number][]
   topRepos: Repo[]
+  /** Every original repo (up to 100), most starred first; feeds the repo picker and the retrieval index. */
+  repos: Repo[]
+  /** READMEs of the most relevant repos, so questions about a project have something to quote. */
+  readmes: { repo: string; text: string }[]
   activeRepos90d: number
   recent: { commits: number; prsOpened: number; reposTouched: number; events: number }
   prs: { total: number; merged: number }
@@ -43,26 +48,26 @@ export async function gh<T>(path: string): Promise<T> {
   return res.json()
 }
 
-async function profileReadme(login: string): Promise<string | null> {
-  try {
-    const res = await fetch(`https://raw.githubusercontent.com/${login}/${login}/HEAD/README.md`)
-    if (!res.ok) return null
-    const text = await res.text()
-    return text
-      .replace(/<!--[\s\S]*?-->/g, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/[#*`>_|-]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 600)
-  } catch {
-    return null
+async function rawReadme(login: string, repo: string, max: number): Promise<string | null> {
+  for (const file of ['README.md', 'readme.md', 'Readme.md']) {
+    try {
+      const res = await fetch(`https://raw.githubusercontent.com/${login}/${repo}/HEAD/${file}`)
+      if (res.ok) return (await res.text()).slice(0, max)
+    } catch { /* try the next name */ }
   }
+  return null
+}
+
+/** Top starred repos plus the most recently pushed one: what they are known for and what they do now. */
+function readmeTargets(own: Repo[], n = 5): Repo[] {
+  const picks = own.slice(0, n)
+  const recent = [...own].sort((a, b) => +new Date(b.pushedAt) - +new Date(a.pushedAt))[0]
+  if (recent && !picks.includes(recent)) picks[n - 1] = recent
+  return picks
 }
 
 export async function loadFacts(login: string): Promise<Facts> {
-  const key = `gitvox:${login.toLowerCase()}`
+  const key = `gitvox:v2:${login.toLowerCase()}`
   try {
     const hit = JSON.parse(sessionStorage.getItem(key) ?? 'null')
     if (hit) return hit
@@ -74,7 +79,7 @@ export async function loadFacts(login: string): Promise<Facts> {
     gh<any[]>(`/users/${login}/events/public?per_page=100`).catch(() => []),
     gh<any>(`/search/issues?q=author:${login}+type:pr&per_page=1`).catch(() => ({ total_count: 0 })),
     gh<any>(`/search/issues?q=author:${login}+type:pr+is:merged&per_page=1`).catch(() => ({ total_count: 0 })),
-    profileReadme(login),
+    rawReadme(login, login, 6000),
   ])
 
   const own: Repo[] = repos.map((r) => ({
@@ -84,7 +89,13 @@ export async function loadFacts(login: string): Promise<Facts> {
     language: r.language,
     pushedAt: r.pushed_at,
     fork: r.fork,
+    topics: r.topics ?? [],
   })).filter((r) => !r.fork)
+
+  own.sort((a, b) => b.stars - a.stars || +new Date(b.pushedAt) - +new Date(a.pushedAt))
+  const targets = readmeTargets(own)
+  const readmes = (await Promise.all(targets.map(async (r) => ({ repo: r.name, text: await rawReadme(login, r.name, 12000) }))))
+    .filter((r): r is { repo: string; text: string } => !!r.text)
 
   const langCount = new Map<string, number>()
   own.forEach((r) => r.language && langCount.set(r.language, (langCount.get(r.language) ?? 0) + 1))
@@ -102,7 +113,9 @@ export async function loadFacts(login: string): Promise<Facts> {
     ownRepos: own.length,
     totalStars: own.reduce((s, r) => s + r.stars, 0),
     languages: [...langCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5),
-    topRepos: [...own].sort((a, b) => b.stars - a.stars).slice(0, 8),
+    topRepos: own.slice(0, 8),
+    repos: own.slice(0, 100),
+    readmes,
     activeRepos90d: own.filter((r) => +new Date(r.pushedAt) > cutoff).length,
     recent: {
       events: events.length,
