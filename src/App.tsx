@@ -6,7 +6,7 @@ import { loadFacts, takeRateLimited, type Facts } from './github'
 import { introScript, repoIntro } from './narrate'
 import { loadRepo, parseTarget, type RepoBundle } from './repo'
 import { loadVoice, startSpeaker, stop } from './speech'
-import { factReply, gapReply, intentOf, retrievalQuery } from './convo'
+import { factReply, gapReply, intentOf, retrievalQuery, templateFollowups } from './convo'
 import { answerMsgs, buildMessages, buildRepoMessages, sourceLabel, suggestFollowups, SentenceChunker, clean } from './ask'
 import { buildProfileIndex, mentionedRepos, portraitHits } from './profile'
 import { DEFAULT_MODEL, loadModel, type Msg } from './llm'
@@ -121,6 +121,7 @@ function Main() {
     let script: string[] = []
     try {
       booting.current = false
+      setFollowups([])
       hush()
       setPhase('fetching'); setMsg('reading github…'); setTtfa(null); setLive(null); setLines([]); setTurns([]); setCue('')
       if ('repo' in target) {
@@ -175,6 +176,7 @@ function Main() {
       const gap = (!repo && facts ? factReply(q, facts) : null) ?? gapReply(q, repo ? ['what it does', 'how to get started', 'how active it is'] : ['their top projects', 'their languages', 'what they have been working on lately'])
       if (gap) {
         patch({ a: gap, gap: true })
+        setFollowups(templateFollowups({ ...(repo ? { headings: [] } : { repos: facts!.repos.slice(0, 6).map((r) => r.name) }), asked: [...prior.map((t) => t.q!), q] }).slice(0, 3))
         gap.split(/(?<=[.!?])\s+/).forEach(sp.push)
         sp.end()
         await sp.done
