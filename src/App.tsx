@@ -60,6 +60,7 @@ function Main() {
   const pindex = useMemo(() => (facts && !repo ? buildProfileIndex(facts) : null), [facts, repo])
 
   // Load the three models one by one on page load, shown as lyrics. Cached loads still show for a moment.
+  const prevRepo = useRef('')
   const booting = useRef(false)
   useEffect(() => {
     if (booting.current) return
@@ -280,6 +281,8 @@ function Main() {
             <input
               value={repoName}
               list="gv-repos"
+              onFocus={() => { if (picks.some((r) => r.name === repoName)) { prevRepo.current = repoName; setRepoName('') } }} // empty so the whole list shows
+              onBlur={() => { if (!repoName && prevRepo.current) setRepoName(prevRepo.current); prevRepo.current = '' }}
               onChange={(e) => {
                 const v = e.target.value.replace(/\s/g, '')
                 setRepoName(v)
@@ -304,10 +307,10 @@ function Main() {
         </section>
 
         <section className="stage" ref={stage}>
-          {(cue || msg || notice) && (
+          {cue && <p className="asked">{cue}</p>}
+          {(msg || notice) && (
             <div className="cue">
-              {cue && <p className="q">{cue}</p>}
-              {(msg || notice) && <p className={`status${phase === 'error' || notice ? ' warn' : ''}`}>{msg || notice}</p>}
+              <p className={`status${phase === 'error' || notice ? ' warn' : ''}`}>{msg || notice}</p>
             </div>
           )}
           {lines.length ? (
@@ -372,7 +375,10 @@ function Main() {
             </div>
           </section>
         )}
-        <span className="pill foot">on-device · no cloud{ttfa !== null && <> · first audio {ttfa} ms</>}</span>
+        <footer className="foot">
+          <span>on-device · no cloud{ttfa !== null && <> · first audio {ttfa} ms</>}</span>
+          <span>AI can make mistakes. Check the answers.</span>
+        </footer>
       </main>
     </>
   )
