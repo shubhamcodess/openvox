@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# runtime assets copied by scripts/assets.mjs
+public/vad
+public/ort

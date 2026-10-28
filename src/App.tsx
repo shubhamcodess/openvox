@@ -9,6 +9,8 @@ import { loadVoice, startSpeaker, stop } from './speech'
 import { answer, answerRepo, buildRepoMessages, sourceLabel, SentenceChunker, clean } from './ask'
 import { DEFAULT_MODEL, loadModel, type Msg } from './llm'
 import Eval from './Eval'
+import Wave from './Wave'
+import { startListening, type ListenState } from './listen'
 
 type Phase = 'idle' | 'fetching' | 'voice' | 'speaking' | 'error'
 type Turn = { q?: string; a: string; src?: { label: string; text: string }[] }
@@ -40,7 +42,9 @@ function Main() {
   const thread = useRef<HTMLDivElement>(null)
   const lineId = useRef(0)
   const abort = useRef<AbortController | null>(null)
-  const rec = useRef<any>(null)
+  const ear = useRef<{ stop(): void } | null>(null)
+  const [earState, setEarState] = useState<ListenState>('waiting')
+  const [heard, setHeard] = useState('')
   const [listening, setListening] = useState(false)
   const [cue, setCue] = useState('')
   const [log, setLog] = useState(false)
@@ -150,31 +154,21 @@ function Main() {
   /** Stop everything that is talking: the LLM stream, queued audio, and the listening mic. */
   function hush() {
     abort.current?.abort()
-    rec.current?.stop()
     stop(); setLive(null); setPhase('idle')
   }
 
   async function listen() {
-    if (listening) { rec.current?.stop(); return }
-    const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition
-    const local = { langs: ['en-US'], processLocally: true }
-    try {
-      // on-device only: never fall back to the browser's cloud recognizer
-      const st = SR?.available ? await SR.available(local) : 'unavailable'
-      if (st === 'downloadable' || st === 'downloading') { setMsg('downloading on-device speech model…'); await SR.install(local); setMsg('') }
-      else if (st !== 'available') { setMsg('On-device speech recognition is not available in this browser. Type instead.'); return }
-      hush()
-      const r = new SR()
-      r.lang = 'en-US'; r.processLocally = true; r.interimResults = true; r.continuous = false
-      let heard = ''
-      r.onresult = (e: any) => { heard = Array.from(e.results as ArrayLike<any>).map((x) => x[0].transcript).join(''); setQuestion(heard) }
-      r.onerror = (e: any) => e.error !== 'no-speech' && e.error !== 'aborted' && setMsg(`mic: ${e.error}`)
-      r.onend = () => { setListening(false); rec.current = null; if (heard.trim()) send(heard) }
-      rec.current = r
-      r.start(); setListening(true)
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : String(err))
-    }
+    if (listening) { ear.current?.stop(); return }
+    hush()
+    setMsg(''); setHeard('')
+    setListening(true)
+    ear.current = await startListening({
+      onState: (s, d) => { setEarState(s); if (s === 'loading') setMsg(d ? `loading ${d}` : 'loading on-device speech model…'); else setMsg('') },
+      onText: setHeard,
+      onBargeIn: () => { abort.current?.abort(); stop(); setLive(null) },
+      onFinal: (t) => { setListening(false); ear.current = null; setHeard(''); send(t) },
+      onError: (m) => { setListening(false); ear.current = null; setHeard(''); setMsg(m) },
+    })
   }
 
   const busy = phase === 'fetching' || phase === 'voice'
@@ -251,13 +245,20 @@ function Main() {
           <button type="button" className={`ico${log ? ' on' : ''}`} onClick={() => setLog((v) => !v)} aria-label="Toggle transcript" aria-pressed={log} title="Transcript">
             <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M3 4h10M3 8h10M3 12h6" /></svg>
           </button>
-          <input
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder={listening ? 'listening…' : loaded ? `Ask about ${name}…` : 'Load a profile first'}
-            aria-label="Ask a question"
-            disabled={!loaded}
-          />
+          {listening && earState !== 'loading' ? (
+            <div className={`ear ${earState}`}>
+              <Wave state={earState} />
+              <span className="heard">{heard || (earState === 'hearing' ? 'listening…' : earState === 'finishing' ? 'still with you…' : 'go ahead, I am listening')}</span>
+            </div>
+          ) : (
+            <input
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              placeholder={listening ? 'loading speech model…' : loaded ? `Ask about ${name}…` : 'Load a profile first'}
+              aria-label="Ask a question"
+              disabled={!loaded || listening}
+            />
+          )}
           <button type="button" className={`ico${listening ? ' rec' : ''}`} onClick={listen} disabled={!loaded || thinking} aria-label={listening ? 'Stop listening' : 'Speak'} title="Speak (on-device)">
             <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><rect x="5.5" y="1.5" width="5" height="8.5" rx="2.5" /><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5V15" /></svg>
           </button>

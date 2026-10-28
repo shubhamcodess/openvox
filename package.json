@@ -8,12 +8,16 @@
     "test": "node --experimental-strip-types --test src/*.test.ts",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "predev": "node scripts/assets.mjs",
+    "prebuild": "node scripts/assets.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@huggingface/transformers": "^4.3.2",
     "@mlc-ai/web-llm": "^0.2.86",
+    "@ricky0123/vad-web": "^0.0.31",
     "phonon-tts": "^0.4.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

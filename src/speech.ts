@@ -109,3 +109,14 @@ export async function speak(
   sp.end()
   await sp.done
 }
+
+/** Dev/test helper: render text to one PCM clip without playing it. */
+export async function synth(text: string): Promise<{ pcm: Float32Array; rate: number }> {
+  if (!tts) throw new Error('voice not loaded')
+  const parts: Float32Array[] = []
+  for await (const p of tts.stream(toSpeech(text))) parts.push(p)
+  const pcm = new Float32Array(parts.reduce((s, p) => s + p.length, 0))
+  let o = 0
+  for (const p of parts) { pcm.set(p, o); o += p.length }
+  return { pcm, rate: tts.sampleRate }
+}

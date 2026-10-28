@@ -10,7 +10,9 @@ Two modes from one box: `username` (profile) or `owner/repo` (repo mode: reads t
 
 **Content-aware speech:** the screen shows the original text, but Phonon gets a speakable version (`src/speakable.ts`): links become "this link", shell commands become "the command shown on screen", acronyms are spelled or pronounced (N P M, Jason, yammel), and file paths, versions and symbols are read naturally. Add words to the tables at the top of that file.
 
-Roadmap: talk back (VAD + small STT), narration personas.
+Talk back: tap the mic. Everything runs on-device: the browser cleans the signal (echo cancel, noise suppression), Silero VAD finds speech with a 400 ms pre-roll, and it waits through thinking pauses (about 1.6 s after a finished sentence, up to about 3.5 s after one that trails off) before sending. The audio is high-passed, trimmed, levelled and transcribed by Moonshine-tiny in a worker; fillers, stutters and phantom "thank you" transcripts are removed before the LLM sees it. Starting to speak interrupts the voice.
+
+Roadmap: narration personas.
 
 ```bash
 npm install
