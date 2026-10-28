@@ -46,7 +46,7 @@ input::placeholder { color:var(--ink-3); opacity:.8; }
   grid-template-columns:minmax(0,1fr) minmax(300px,380px);
   grid-template-areas:"top top" "setup talk" "stage talk" "dock talk";
 }
-.top { grid-area:top; display:flex; justify-content:space-between; align-items:center; padding:18px 0; }
+.top { grid-area:top; display:flex; align-items:center; gap:28px; padding:16px 0 14px; margin-bottom:14px; border-bottom:1px solid var(--hair); }
 .brand { font-weight:560; letter-spacing:-.03em; font-size:1rem; }
 .brand i { color: var(--cut); font-style: normal; }
 .pill { display:inline-flex; align-items:center; height:26px; padding:0 10px; border:1px solid var(--hair-2); border-radius:99px; font:400 .68rem var(--mono); color:var(--ink-3); background:var(--glass); backdrop-filter:blur(6px); }
@@ -171,7 +171,10 @@ input::placeholder { color:var(--ink-3); opacity:.8; }
 .starters button { height:28px; padding:0 12px; border-radius:99px; border:1px solid var(--hair-2); background:var(--glass); color:var(--ink-2); font-size:.74rem; transition:color .2s, border-color .2s; }
 .starters button:hover { color:var(--ink); border-color:color-mix(in srgb, var(--ink) 30%, transparent); }
 
-/* mode tabs */
-.modes { display:flex; gap:4px; }
-.modes button { height:26px; padding:0 12px; border-radius:99px; border:1px solid var(--hair-2); background:none; color:var(--ink-3); font-size:.74rem; }
-.modes button.on { color:var(--ink); background:var(--raise); }
+/* mode tabs: plain text links, active one underlined */
+.modes { display:flex; gap:22px; align-self:stretch; }
+.modes button { position:relative; display:flex; align-items:center; background:none; border:0; padding:0; font-size:.84rem; color:var(--ink-3); transition:color .2s; }
+.modes button:hover { color:var(--ink-2); }
+.modes button.on { color:var(--ink); }
+.modes button.on::after { content:''; position:absolute; left:0; right:0; bottom:-15px; height:1px; background:var(--ink); }
+.top .pill { margin-left:auto; height:auto; padding:0; border:0; background:none; backdrop-filter:none; }
