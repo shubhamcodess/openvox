@@ -169,7 +169,7 @@ input::placeholder { color:var(--ink-3); opacity:.8; }
 .ear.hearing .heard { color:var(--ink); }
 
 /* starter questions */
-.starters { display:flex; flex-wrap:wrap; justify-content:center; gap:6px; }
+.starters { width:min(620px,100%); display:flex; flex-wrap:wrap; justify-content:center; gap:6px; }
 .starters button { height:28px; padding:0 12px; border-radius:99px; border:1px solid var(--hair-2); background:var(--glass); color:var(--ink-2); font-size:.74rem; transition:color .2s, border-color .2s; }
 .starters button:hover { color:var(--ink); border-color:color-mix(in srgb, var(--ink) 30%, transparent); }
 
