@@ -26,3 +26,7 @@ dist-ssr
 # runtime assets copied by scripts/assets.mjs
 public/vad
 public/ort
+
+# local tooling and notes
+.claude/
+HANDOVER.md
