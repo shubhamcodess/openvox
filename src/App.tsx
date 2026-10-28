@@ -267,7 +267,6 @@ function Main() {
       <main className={`app${log ? ' with-log' : ''}`}>
         <header className="top">
           <span className="brand">openvox<i>.</i><b>{MODES[0].toLowerCase()}</b></span>
-          <span className="pill">on-device · no cloud{ttfa !== null && <> · first audio {ttfa} ms</>}</span>
           <nav className="modes" aria-label="Mode">
             {MODES.map((m) => <button key={m} className="on" aria-current="page">{m}</button>)}
           </nav>
@@ -373,6 +372,7 @@ function Main() {
             </div>
           </section>
         )}
+        <span className="pill foot">on-device · no cloud{ttfa !== null && <> · first audio {ttfa} ms</>}</span>
       </main>
     </>
   )
