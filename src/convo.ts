@@ -19,10 +19,35 @@ export function trimHistory(history: Msg[], keep = 3): Msg[] {
 }
 
 /** Short follow-ups ("what about the second one?") carry no search terms; borrow the previous question's. */
-export function retrievalQuery(question: string, history: Msg[]): string {
+export function retrievalQuery(question: string, history: Msg[], hints: string[] = []): string {
   if (tokenize(question).length >= 4) return question
   const prev = [...history].reverse().find((m) => m.role === 'user')
-  return prev ? `${question} ${prev.content}` : question
+  return [question, prev?.content, ...hints].filter(Boolean).join(' ')
+}
+
+const norm0 = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+/** Names from `names` that appear in `text`, in the order they were said. */
+export function orderedMentions(text: string, names: string[]): string[] {
+  const t = norm0(text)
+  return names
+    .map((n) => [n, norm0(n).length >= 3 ? t.indexOf(norm0(n)) : -1] as const)
+    .filter(([, i]) => i >= 0)
+    .sort((a, b) => a[1] - b[1])
+    .map(([n]) => n)
+}
+
+const ORDINALS: Record<string, number> = { first: 0, '1st': 0, second: 1, '2nd': 1, third: 2, '3rd': 2, fourth: 3, '4th': 3, fifth: 4, '5th': 4, last: -1 }
+
+/** "tell me about the second one" -> "tell me about <name>", using the repos named in the previous answer. */
+export function resolveRefs(question: string, last: string[]): string {
+  if (!last.length) return question
+  const re = /\b(?:the |that |this )?(first|second|third|fourth|fifth|last|1st|2nd|3rd|4th|5th)(?: (?:one|repo|repository|project))?\b|\b(?:that|this) (?:one|repo|repository|project)\b/i
+  const m = re.exec(question)
+  if (!m) return question
+  const ord = m[1] ? ORDINALS[m[1].toLowerCase()] : 0
+  const name = last.at(ord) ?? last[0]
+  return question.replace(m[0], name)
 }
 
 export type Intent = 'person' | 'repos' | 'broad' | 'content'
@@ -76,22 +101,16 @@ export function factReply(question: string, f: Pick<Facts, 'name' | 'company' | 
   return null
 }
 
-/** Prompt for silently proposing what to ask next. `topics` keeps the suggestions inside what we can answer. */
-export function followupPrompt(subject: string, question: string, answer: string, asked: string[], topics: string): Msg[] {
-  return [
-    {
-      role: 'system',
-      content: `You suggest what a listener could ask next in a voice conversation about ${subject}. Write three different short questions, each under nine words and specific to ${subject}, each on its own line. Output only the three lines, nothing else. They must be answerable from these topics: ${topics}. Do not repeat anything already asked.`,
-    },
-    { role: 'user', content: `Already asked: ${asked.slice(-6).join(' | ')}\nLast question: ${question}\nLast answer: ${answer.slice(0, 400)}\n\nWrite the three questions now, one per line:` },
-  ]
+/** Asked inside the ongoing conversation, so the model reuses what it already read and the cache stays warm. */
+export function followupRequest(subject: string, asked: string[]): string {
+  return `Now suggest three different questions I could ask next about ${subject}, based on what we have covered and what you can answer from the context. Each under nine words, written as a plain question, one per line, no numbering. Nothing else. They must be new: not the same as any question already asked or suggested earlier in this conversation.${asked.length ? ` Already used: ${asked.slice(-10).join(' | ')}` : ''}`
 }
 
 /** Clean model output into at most three distinct questions, none already asked. */
 export function parseFollowups(raw: string, asked: string[]): string[] {
   const seen = new Set(asked.map((q) => q.toLowerCase().replace(/[^a-z0-9]/g, '')))
   const out: string[] = []
-  for (const line of raw.replace(/<\/?think>/g, '').split('\n')) {
+  for (const line of raw.replace(/<\/?think>/g, '').split(/\n|(?<=\?)\s+/)) {
     const q = line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').replace(/^["']|["']$/g, '').trim()
     const key = q.toLowerCase().replace(/[^a-z0-9]/g, '')
     if (q.length < 8 || q.length > 70 || !q.endsWith('?') || seen.has(key)) continue
@@ -102,23 +121,21 @@ export function parseFollowups(raw: string, asked: string[]): string[] {
   return out
 }
 
-const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
-const GENERIC = /^(readme|documentation|docs?|overview|introduction|table of contents|contents|license|licence|contributing|why|what this is)$/i
+const NEXT_RE = /\s*\bNEXT\s*:/i
 
-/**
- * Grounded fallbacks that need no model: sections the answer drew on, repos not discussed yet, or stock questions.
- * `headings` are excerpt section titles (repo mode); `repos` are repo names, most relevant first (profile mode).
- */
-export function templateFollowups(opts: { headings?: string[]; repos?: string[]; asked: string[] }): string[] {
-  const asked = opts.asked.map(norm)
-  const out: string[] = []
-  const add = (q: string) => { if (!out.some((x) => norm(x) === norm(q)) && !asked.some((a) => a === norm(q) || a.includes(norm(q)))) out.push(q) }
-  for (const h of opts.headings ?? []) {
-    const t = h.replace(/^[\d.\s]+/, '').replace(/[^\w\s'-]/g, '').trim()
-    if (t.length > 3 && t.length < 40 && !GENERIC.test(t) && !asked.some((a) => a.includes(norm(t)))) add(`Tell me about ${t.toLowerCase()}`)
-  }
-  for (const r of opts.repos ?? []) if (!asked.some((a) => a.includes(norm(r)))) add(`What is ${r.replace(/[-_]/g, ' ')} about?`)
-  if (opts.headings) ['How active is it?', 'How can I contribute?', 'What license does it use?'].forEach(add)
-  else ['What are they working on lately?', 'What languages do they use?'].forEach(add)
-  return out
+/** Splits a streamed reply into what is spoken and the trailing "NEXT: q | q | q" suggestions. */
+export function splitNext(full: string, done: boolean): { say: string; next: string } {
+  const m = NEXT_RE.exec(full)
+  if (m) return { say: full.slice(0, m.index), next: full.slice(m.index + m[0].length) }
+  const hold = done ? 0 : Math.min(full.length, 7) // might be the start of "NEXT:"
+  return { say: full.slice(0, full.length - hold), next: '' }
+}
+
+export const nextRule = (asked: string[]) =>
+  `Then on a new line write NEXT: followed by three short new questions I could ask about this, each under nine words, separated by " | ".${asked.length ? ` Already asked: ${asked.slice(-8).join(' | ')}.` : ''}`
+
+/** Turns the text after "NEXT:" into up to three distinct questions. */
+export function parseNext(tail: string, asked: string[]): string[] {
+  const lines = tail.split(/\||\n/).map((x) => x.trim().replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '')).filter((x) => x.length > 6).map((x) => (x.endsWith('?') ? x : `${x.replace(/[.!]+$/, '')}?`))
+  return parseFollowups(lines.join('\n'), asked)
 }

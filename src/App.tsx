@@ -6,10 +6,11 @@ import { loadFacts, takeRateLimited, type Facts } from './github'
 import { introScript, repoIntro } from './narrate'
 import { loadRepo, parseTarget, type RepoBundle } from './repo'
 import { loadVoice, startSpeaker, stop } from './speech'
-import { factReply, gapReply, intentOf, retrievalQuery, templateFollowups } from './convo'
+import { factReply, gapReply, intentOf, nextRule, orderedMentions, parseNext, resolveRefs, retrievalQuery, splitNext } from './convo'
+import { Session } from './session'
 import { answerMsgs, buildMessages, buildRepoMessages, sourceLabel, suggestFollowups, SentenceChunker, clean } from './ask'
 import { buildProfileIndex, mentionedRepos, portraitHits } from './profile'
-import { DEFAULT_MODEL, loadModel, type Msg } from './llm'
+import { isMobile, loadModel, pickModel, type Msg } from './llm'
 import { loadStt } from './stt'
 import Eval from './Eval'
 import Wave from './Wave'
@@ -62,14 +63,19 @@ function Main() {
   // Load the three models one by one on page load, shown as lyrics. Cached loads still show for a moment.
   const [followups, setFollowups] = useState<string[]>([])
   const prevRepo = useRef('')
+  const session = useRef(new Session()).current
+  const suggested = useRef<string[]>([])
+  const ctx = useRef<{ sys: string; subject: string; intro: string } | null>(null)
   const booting = useRef(false)
   useEffect(() => {
     if (booting.current) return
     booting.current = true
+    void navigator.storage?.persist?.().catch(() => {})
     const stages: [string, (on: (pct: number) => void) => Promise<unknown>][] = [
       ['voice', (on) => loadVoice(on)],
-      ['language model', (on) => loadModel(DEFAULT_MODEL, (p) => on(Math.round(p * 100)))],
-      ['speech recognition', (on) => loadStt(on)],
+      ['language model', async (on) => loadModel(await pickModel(), (p) => on(Math.round(p * 100)))],
+      // on phones the speech model waits until the mic is first used, to keep memory and the first load light
+      ...(isMobile() ? [] : [['speech recognition', (on: (pct: number) => void) => loadStt(on)] as [string, (on: (pct: number) => void) => Promise<unknown>]]),
     ]
     void (async () => {
       for (const [name, load] of stages) {
@@ -79,7 +85,7 @@ function Main() {
         setLines((l) => [...l.slice(-6), { id, text: `Loading ${name}…` }])
         setLive(id)
         const t0 = Date.now()
-        await load((p) => set(`Loading ${name} · ${Math.round(p)}%`)).catch(() => {})
+        await load((p) => set(`Loading ${name} · ${Math.round(p)}%`)).catch((e) => setMsg(e instanceof Error ? e.message : String(e)))
         await sleep(Math.max(0, 900 - (Date.now() - t0)))
         set(`Loaded ${name}.`)
         await sleep(350)
@@ -121,6 +127,7 @@ function Main() {
     let script: string[] = []
     try {
       booting.current = false
+      session.clear(); ctx.current = null; suggested.current = []
       setFollowups([])
       hush()
       setPhase('fetching'); setMsg('reading github…'); setTtfa(null); setLive(null); setLines([]); setTurns([]); setCue('')
@@ -132,14 +139,18 @@ function Main() {
         ])
         setRepo(bundle); setFacts(o)
         script = repoIntro(bundle.facts, o?.name)
+        ctx.current = { sys: buildRepoMessages(bundle.facts, o, '', [])[0].content, subject: bundle.facts.name, intro: '' }
         history.replaceState(null, '', `?r=${target.owner}/${target.repo}`)
       } else {
         const f = await loadFacts(target.user)
         setRepo(null); setFacts(f)
         script = introScript(f)
+        ctx.current = { sys: buildMessages(f, '', [])[0].content, subject: f.name ?? f.login, intro: '' }
         history.replaceState(null, '', `?u=${f.login}`)
       }
       setTurns([{ a: '' }])
+      if (ctx.current) ctx.current.intro = script.join(' ')
+      warm()
       setNotice(takeRateLimited() ? 'GitHub rate limit hit (60 requests/hour, anonymous). Some details may be missing; it resets within the hour.' : '')
       setPhase('voice'); setMsg('loading voice · first run ~65 MB')
       await loadVoice((p) => setMsg(`loading voice · ${p}%`))
@@ -155,9 +166,27 @@ function Main() {
     }
   }
 
+  /** Quietly ask the model what to ask first / next, inside the live session. */
+  function warm(asked: string[] = []) {
+    const c = ctx.current
+    if (!c) return
+    const ctl = new AbortController()
+    abort.current = ctl
+    void suggestFollowups(session, c.sys, c.subject, [...asked, ...suggested.current], ctl.signal).then((f) => { if (ctl.signal.aborted) return; suggested.current.push(...f); setFollowups(f) })
+  }
+
+  function newSession() {
+    hush()
+    session.clear(); suggested.current = []
+    setTurns([{ a: ctx.current?.intro ?? '' }]); setCue(''); setLines([]); setLive(null); setMsg(''); setThinking(false); setFollowups([])
+    warm()
+  }
+
   async function send(raw: string) {
     const q = raw.trim()
     if (!q || (!facts && !repo) || thinking) return
+    const prevChips = followups
+    abort.current?.abort()
     setQuestion(''); setCue(q); setFollowups([]); setThinking(true); stop(); setPhase('idle'); setLive(null)
     const ac = new AbortController()
     abort.current = ac
@@ -168,15 +197,16 @@ function Main() {
     try {
       await loadVoice(() => {})
       setMsg('loading language model · first run ~1 GB')
-      await loadModel(DEFAULT_MODEL, (p) => setMsg(`loading language model · ${Math.round(p * 100)}%`))
+      await loadModel(await pickModel(), (p) => setMsg(`loading language model · ${Math.round(p * 100)}%`))
       setMsg('')
       if (ac.signal.aborted) return
       const history: Msg[] = prior.flatMap((t) => [{ role: 'user' as const, content: t.q! }, { role: 'assistant' as const, content: clean(t.a) }])
       const sp = startSpeaker(onSentence(false), setTtfa)
-      const gap = (!repo && facts ? factReply(q, facts) : null) ?? gapReply(q, repo ? ['what it does', 'how to get started', 'how active it is'] : ['their top projects', 'their languages', 'what they have been working on lately'])
+      const rq = repo ? q : resolveRefs(q, session.entities)
+      const gap = (!repo && facts ? factReply(q, facts) : null) ?? gapReply(q, repo ? [] : facts!.repos.slice(0, 3).map((r) => r.name))
       if (gap) {
         patch({ a: gap, gap: true })
-        setFollowups(templateFollowups({ ...(repo ? { headings: [] } : { repos: facts!.repos.slice(0, 6).map((r) => r.name) }), asked: [...prior.map((t) => t.q!), q] }).slice(0, 3))
+        setFollowups(prevChips)
         gap.split(/(?<=[.!?])\s+/).forEach(sp.push)
         sp.end()
         await sp.done
@@ -184,35 +214,43 @@ function Main() {
       }
       const chunker = new SentenceChunker()
       let full = ''
-      const query = retrievalQuery(q, history)
+      let said = 0
+      const asked = [...prior.map((t) => t.q!), q, ...suggested.current]
+      const query = retrievalQuery(rq, history, session.entities)
       let hits: ReturnType<NonNullable<typeof pindex>['search']>
       let msgs: Msg[]
       if (repo) {
         hits = repo.index.search(query, 4)
-        msgs = buildRepoMessages(repo.facts, facts, history, q, hits)
+        const [sys, usr] = buildRepoMessages(repo.facts, facts, rq, hits)
+        msgs = session.begin(sys.content, `${usr.content}\n\n${nextRule(asked)}`, q)
       } else {
         const named = mentionedRepos(query, facts!.repos)
-        const intent = intentOf(q, mentionedRepos(q, facts!.repos).size > 0)
+        const intent = intentOf(rq, mentionedRepos(rq, facts!.repos).size > 0)
         hits = intent === 'broad' ? portraitHits(pindex!) : intent === 'content' ? pindex!.search(query, 4, { boost: named, pinFirst: false }) : []
-        msgs = buildMessages(facts!, history, q, hits)
+        const [sys, usr] = buildMessages(facts!, rq, hits)
+        msgs = session.begin(sys.content, `${usr.content}\n\n${nextRule(asked)}`, q)
       }
       patch({ src: hits.map((h) => ({ label: sourceLabel(h), text: h.chunk.text })) })
       const stream = answerMsgs(msgs, ac.signal)
       for await (const d of stream) {
         full += d
-        patch({ a: display(full) })
-        chunker.push(d).forEach(sp.push)
+        const { say } = splitNext(full, false)
+        patch({ a: display(say) })
+        chunker.push(say.slice(said)).forEach(sp.push)
+        said = say.length
       }
-      if (ac.signal.aborted) return
+      if (ac.signal.aborted) { session.abandon(); return }
+      session.finish(full)
+      const end = splitNext(full, true)
+      patch({ a: display(end.say) })
+      chunker.push(end.say.slice(said)).forEach(sp.push)
+      if (facts && !repo) { const m = orderedMentions(clean(end.say), facts.repos.map((r) => r.name)); if (m.length) session.entities = m }
+      const more = parseNext(end.next, asked)
+      suggested.current.push(...more)
+      setFollowups(more)
       chunker.flush().forEach(sp.push)
       sp.end()
-      // while the voice finishes, quietly work out what to ask next
-      const topics = repo ? hits.map(sourceLabel).join('; ') : facts!.repos.slice(0, 8).map((r) => r.name).join(', ')
-      const asked = [...prior.map((t) => t.q!), q]
-      const fill = repo
-        ? { headings: hits.map((h) => h.chunk.heading.split(' › ').pop() ?? '') }
-        : { repos: facts!.repos.slice(0, 6).map((r) => r.name) }
-      void suggestFollowups(repo ? repo.facts.name : facts!.name, q, clean(full), asked, topics, fill, ac.signal).then((f) => { if (!ac.signal.aborted) setFollowups(f) })
+
       await sp.done
     } catch (err) {
       setMsg(err instanceof Error ? err.message : String(err))
@@ -267,9 +305,6 @@ function Main() {
       : []
 
   const picks = facts && owner.trim().toLowerCase() === facts.login.toLowerCase() ? facts.repos : []
-  const starters = repo
-    ? ['What does it do?', 'How do I get started?', 'Is it actively maintained?', 'How can I contribute?']
-    : ['What are they known for?', 'What are they working on lately?', 'Which repos should I look at first?', 'What languages do they use?']
   const talking = thinking || phase === 'speaking'
 
   return (
@@ -307,6 +342,7 @@ function Main() {
               {picks.map((r) => <option key={r.name} value={r.name} label={`${r.stars ? `★ ${r.stars} · ` : ''}${r.description ?? r.language ?? ''}`.slice(0, 90)} />)}
             </datalist>
             <button className="go" disabled={busy || !owner.trim()} aria-label="Load">{busy ? <span className="spin" /> : '→'}</button>
+            {loaded && <button type="button" className="go fresh" onClick={newSession} disabled={busy} aria-label="New session" title="New session">↺</button>}
           </form>
           {loaded && (
             <dl className="stats">
@@ -333,9 +369,9 @@ function Main() {
           )}
           {thinking && live === null && !msg && <p className="dots stage-dots"><i /><i /><i /></p>}
           <div className="under">
-            {loaded && !log && !thinking && !listening && phase !== 'fetching' && (followups.length || turns.length <= 1) ? (
+            {loaded && !log && !thinking && !listening && phase !== 'fetching' && followups.length ? (
               <div className="starters">
-                {(followups.length ? followups : starters).map((t) => <button key={t} type="button" onClick={() => send(t)}>{t}</button>)}
+                {followups.map((t) => <button key={t} type="button" onClick={() => send(t)}>{t}</button>)}
               </div>
             ) : null}
           </div>

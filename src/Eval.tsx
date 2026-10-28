@@ -24,7 +24,7 @@ export default function Eval() {
           setStatus(`${model}: ${q.id}`)
           const t0 = performance.now()
           let tFirst = 0, n = 0, a = ''
-          for await (const d of chat(buildMessages(FIXTURE, [], q.q))) {
+          for await (const d of chat(buildMessages(FIXTURE, q.q))) {
             if (!tFirst) tFirst = performance.now()
             n++; a += d
           }

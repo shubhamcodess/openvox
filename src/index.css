@@ -203,3 +203,6 @@ input::placeholder { color:var(--ink-3); opacity:.8; }
   .foot { font-size:.6rem; padding:0 2px; }
   .starters button { height:auto; min-height:28px; padding:4px 10px; text-align:left; }
 }
+
+.go.fresh{background:transparent;color:inherit;border:1px solid currentColor;opacity:.6}
+.go.fresh:hover:not(:disabled){opacity:1}

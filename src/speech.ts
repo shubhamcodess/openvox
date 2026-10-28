@@ -7,13 +7,14 @@ let analyser: AnalyserNode | null = null
 let sources: AudioBufferSourceNode[] = []
 let controller: AbortController | null = null
 
-export async function loadVoice(onProgress: (pct: number) => void) {
-  if (tts) return
-  tts = await PhononTTS.load({
+let voiceLoad: Promise<void> | null = null
+export function loadVoice(onProgress: (pct: number) => void): Promise<void> {
+  if (tts) return Promise.resolve()
+  return (voiceLoad ??= PhononTTS.load({
     lang: 'en',
     device: 'auto',
     onProgress: ({ loaded, total }) => total && onProgress(Math.round((loaded / total) * 100)),
-  })
+  }).then((t) => { tts = t }, (e) => { voiceLoad = null; throw e }))
 }
 
 export const getAnalyser = () => analyser

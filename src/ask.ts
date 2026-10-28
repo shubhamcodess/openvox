@@ -1,7 +1,8 @@
 import type { Facts } from './github'
 import { chat, type Msg } from './llm'
 import type { RepoFacts } from './repo'
-import { followupPrompt, parseFollowups, templateFollowups, trimHistory } from './convo'
+import { followupRequest, parseFollowups } from './convo'
+import type { Session } from './session'
 import type { Hit } from './retrieval'
 
 const fmt = (n: number) => n.toLocaleString('en-US')
@@ -64,11 +65,10 @@ const REMINDER = `Answer in two to four short spoken sentences, as plain talk. N
 const withContext = (hits: Hit[], question: string) =>
   `${hits.length ? `EXCERPTS:\n${formatExcerpts(hits)}\n\n` : ''}QUESTION: ${question}\n\n${REMINDER}`
 
-export function buildMessages(f: Facts, history: Msg[], question: string, hits: Hit[] = []): Msg[] {
+export function buildMessages(f: Facts, question: string, hits: Hit[] = []): Msg[] {
   return [
     { role: 'system', content: `${RULES}\n\nCONTEXT (facts about the profile, then per-question excerpts):\n${factsSheet(f)}` },
-    ...trimHistory(history),
-    { role: 'user', content: withContext(hits, question) },
+        { role: 'user', content: withContext(hits, question) },
   ]
 }
 
@@ -148,12 +148,11 @@ export function formatExcerpts(hits: Hit[]): string {
 export const sourceLabel = (h: Hit) => `${h.chunk.source}${h.chunk.heading ? ` › ${h.chunk.heading.split(' › ').slice(-1)[0]}` : ''}`
 
 /** Stable system prefix (repo + owner facts); per-question excerpts ride in the user turn. */
-export function buildRepoMessages(repo: RepoFacts, owner: Facts | null, history: Msg[], question: string, hits: Hit[]): Msg[] {
+export function buildRepoMessages(repo: RepoFacts, owner: Facts | null, question: string, hits: Hit[]): Msg[] {
   const system = `${REPO_RULES}\n\nREPO FACTS:\n${repoSheet(repo)}${owner ? `\n\nOWNER FACTS (the person behind this repo):\n${factsSheet(owner)}` : ''}`
   return [
     { role: 'system', content: system },
-    ...trimHistory(history),
-    { role: 'user', content: withContext(hits, question) },
+        { role: 'user', content: withContext(hits, question) },
   ]
 }
 
@@ -161,17 +160,17 @@ export async function* answerMsgs(msgs: Msg[], signal?: AbortSignal) {
   yield* chat(msgs, signal)
 }
 
-/** Silently asks the model what to ask next, then tops up to three with grounded templates. Never throws. */
+/** Silently asks the model, inside the live session, what to ask next. Never throws; may return fewer than three. */
 export async function suggestFollowups(
-  subject: string, question: string, answer: string, asked: string[], topics: string,
-  fill: { headings?: string[]; repos?: string[] }, signal?: AbortSignal,
+  session: Session, system: string, subject: string, asked: string[], signal: AbortSignal,
 ): Promise<string[]> {
-  let fromModel: string[] = []
   try {
+    const sent = followupRequest(subject, asked)
     let raw = ''
-    for await (const d of chat(followupPrompt(subject, question, answer, asked, topics), signal)) raw += d
-    fromModel = parseFollowups(raw, asked)
-  } catch { /* fall through to templates */ }
-  const have = [...asked, ...fromModel]
-  return [...fromModel, ...templateFollowups({ ...fill, asked: have })].slice(0, 3)
+    for await (const d of chat(session.begin(system, sent, 'chips'), signal)) raw += d
+    if (signal.aborted) { session.abandon(); return [] }
+    const out = parseFollowups(raw, asked)
+    session.abandon() // standalone: kept out of the transcript so the model never mistakes it for a topic
+    return out
+  } catch { session.abandon(); return [] }
 }

@@ -140,11 +140,12 @@ test('parseFollowups keeps up to three fresh questions', () => {
   assert.deepEqual(parseFollowups('Is it?', []), [])
 })
 
-import { templateFollowups } from './convo.ts'
-test('templateFollowups: sections, repos, stock questions; skips what was asked', () => {
-  const t = templateFollowups({ headings: ['1.6 Wire your agent', 'README', 'Install'], asked: ['How active is it?'] })
-  assert.deepEqual(t.slice(0, 2), ['Tell me about wire your agent', 'Tell me about install'])
-  assert.ok(!t.includes('How active is it?'))
-  const p = templateFollowups({ repos: ['lets-dsa', 'focusify-yt'], asked: ['What is lets dsa about?'] })
-  assert.equal(p[0], 'What is focusify yt about?')
+
+import { orderedMentions, resolveRefs } from './convo.ts'
+test('ordinals resolve to repos named in the last answer', () => {
+  const last = orderedMentions('Try lets-dsa first, then focusify yt, and finally openvox.', ['openvox', 'focusify-yt', 'lets-dsa', 'other'])
+  assert.deepEqual(last, ['lets-dsa', 'focusify-yt', 'openvox'])
+  assert.equal(resolveRefs('tell me about the second one', last), 'tell me about focusify-yt')
+  assert.equal(resolveRefs('and the last repo?', last), 'and openvox?')
+  assert.equal(resolveRefs('how do I install it', last), 'how do I install it')
 })
