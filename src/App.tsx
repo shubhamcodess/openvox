@@ -10,6 +10,7 @@ import { factReply, gapReply, intentOf, retrievalQuery } from './convo'
 import { answerMsgs, buildMessages, buildRepoMessages, sourceLabel, SentenceChunker, clean } from './ask'
 import { buildProfileIndex, mentionedRepos, portraitHits } from './profile'
 import { DEFAULT_MODEL, loadModel, type Msg } from './llm'
+import { loadStt } from './stt'
 import Eval from './Eval'
 import Wave from './Wave'
 import { startListening, type ListenState } from './listen'
@@ -22,6 +23,11 @@ export default function App() {
   if (new URLSearchParams(location.search).has('eval')) return <Eval />
   return <Main />
 }
+
+/** Modes of openvox. More will be added here; each gets its own subpage under the tab. */
+const MODES = ['GitHub']
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 const display = (s: string) => s.replace(/<\/?think>/g, '').trimStart()
 
@@ -53,6 +59,36 @@ function Main() {
   const [log, setLog] = useState(false)
   const pindex = useMemo(() => (facts && !repo ? buildProfileIndex(facts) : null), [facts, repo])
 
+  // Load the three models one by one on page load, shown as lyrics. Cached loads still show for a moment.
+  const booting = useRef(false)
+  useEffect(() => {
+    if (booting.current) return
+    booting.current = true
+    const stages: [string, (on: (pct: number) => void) => Promise<unknown>][] = [
+      ['voice', (on) => loadVoice(on)],
+      ['language model', (on) => loadModel(DEFAULT_MODEL, (p) => on(Math.round(p * 100)))],
+      ['speech recognition', (on) => loadStt(on)],
+    ]
+    void (async () => {
+      for (const [name, load] of stages) {
+        if (!booting.current) return
+        const id = ++lineId.current
+        const set = (text: string) => setLines((l) => (booting.current ? l.map((x) => (x.id === id ? { ...x, text } : x)) : l))
+        setLines((l) => [...l.slice(-6), { id, text: `Loading ${name}…` }])
+        setLive(id)
+        const t0 = Date.now()
+        await load((p) => set(`Loading ${name} · ${Math.round(p)}%`)).catch(() => {})
+        await sleep(Math.max(0, 900 - (Date.now() - t0)))
+        set(`Loaded ${name}.`)
+        await sleep(350)
+      }
+      if (!booting.current) return
+      setLive(null)
+      await sleep(1400)
+      if (booting.current) { booting.current = false; setLines([]) }
+    })()
+  }, [])
+
   // keep the thread pinned to the bottom unless the reader scrolled up
   useEffect(() => {
     const el = thread.current
@@ -82,6 +118,7 @@ function Main() {
   async function go(target: NonNullable<ReturnType<typeof parseTarget>>) {
     let script: string[] = []
     try {
+      booting.current = false
       hush()
       setPhase('fetching'); setMsg('reading github…'); setTtfa(null); setLive(null); setLines([]); setTurns([]); setCue('')
       if ('repo' in target) {
@@ -229,7 +266,10 @@ function Main() {
       <Field anchor={stage} />
       <main className={`app${log ? ' with-log' : ''}`}>
         <header className="top">
-          <span className="brand">gitvox<i>.</i></span>
+          <span className="brand">openvox<i>.</i></span>
+          <nav className="modes" aria-label="Mode">
+            {MODES.map((m) => <button key={m} className="on" aria-current="page">{m}</button>)}
+          </nav>
           <span className="pill">on-device · no cloud{ttfa !== null && <> · first audio {ttfa} ms</>}</span>
         </header>
 

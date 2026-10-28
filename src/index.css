@@ -170,3 +170,8 @@ input::placeholder { color:var(--ink-3); opacity:.8; }
 .starters { position:absolute; left:0; right:0; bottom:0; display:flex; flex-wrap:wrap; justify-content:center; gap:6px; }
 .starters button { height:28px; padding:0 12px; border-radius:99px; border:1px solid var(--hair-2); background:var(--glass); color:var(--ink-2); font-size:.74rem; transition:color .2s, border-color .2s; }
 .starters button:hover { color:var(--ink); border-color:color-mix(in srgb, var(--ink) 30%, transparent); }
+
+/* mode tabs */
+.modes { display:flex; gap:4px; }
+.modes button { height:26px; padding:0 12px; border-radius:99px; border:1px solid var(--hair-2); background:none; color:var(--ink-3); font-size:.74rem; }
+.modes button.on { color:var(--ink); background:var(--raise); }

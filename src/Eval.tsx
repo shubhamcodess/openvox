@@ -48,7 +48,7 @@ export default function Eval() {
 
   return (
     <main className="shell">
-      <header className="top"><span className="brand">gitvox<i>.</i> eval</span></header>
+      <header className="top"><span className="brand">openvox<i>.</i> eval</span></header>
       <p className="msg">10 questions on a fictional profile: 6 fact lookups, 4 traps where the right answer is “I don’t have that”.</p>
       <div className="row" style={{ justifyContent: 'flex-start' }}>
         {CANDIDATES.map((m) => (
