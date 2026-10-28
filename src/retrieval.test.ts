@@ -132,3 +132,19 @@ test('factReply answers employer and location from the profile', () => {
   assert.equal(factReply('What is their main language?', f), null)
   assert.equal(factReply('Where is the config file?', f), null)
 })
+
+import { parseFollowups } from './convo.ts'
+test('parseFollowups keeps up to three fresh questions', () => {
+  const raw = '<think></think>\n1. What languages do they use?\n- How active is the repo?\n"Who contributes to it?"\nNot a question\nWhat is their salary?'
+  assert.deepEqual(parseFollowups(raw, ['What is their salary?']), ['What languages do they use?', 'How active is the repo?', 'Who contributes to it?'])
+  assert.deepEqual(parseFollowups('Is it?', []), [])
+})
+
+import { templateFollowups } from './convo.ts'
+test('templateFollowups: sections, repos, stock questions; skips what was asked', () => {
+  const t = templateFollowups({ headings: ['1.6 Wire your agent', 'README', 'Install'], asked: ['How active is it?'] })
+  assert.deepEqual(t.slice(0, 2), ['Tell me about wire your agent', 'Tell me about install'])
+  assert.ok(!t.includes('How active is it?'))
+  const p = templateFollowups({ repos: ['lets-dsa', 'focusify-yt'], asked: ['What is lets dsa about?'] })
+  assert.equal(p[0], 'What is focusify yt about?')
+})

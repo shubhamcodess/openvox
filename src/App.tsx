@@ -7,7 +7,7 @@ import { introScript, repoIntro } from './narrate'
 import { loadRepo, parseTarget, type RepoBundle } from './repo'
 import { loadVoice, startSpeaker, stop } from './speech'
 import { factReply, gapReply, intentOf, retrievalQuery } from './convo'
-import { answerMsgs, buildMessages, buildRepoMessages, sourceLabel, SentenceChunker, clean } from './ask'
+import { answerMsgs, buildMessages, buildRepoMessages, sourceLabel, suggestFollowups, SentenceChunker, clean } from './ask'
 import { buildProfileIndex, mentionedRepos, portraitHits } from './profile'
 import { DEFAULT_MODEL, loadModel, type Msg } from './llm'
 import { loadStt } from './stt'
@@ -60,6 +60,7 @@ function Main() {
   const pindex = useMemo(() => (facts && !repo ? buildProfileIndex(facts) : null), [facts, repo])
 
   // Load the three models one by one on page load, shown as lyrics. Cached loads still show for a moment.
+  const [followups, setFollowups] = useState<string[]>([])
   const prevRepo = useRef('')
   const booting = useRef(false)
   useEffect(() => {
@@ -156,7 +157,7 @@ function Main() {
   async function send(raw: string) {
     const q = raw.trim()
     if (!q || (!facts && !repo) || thinking) return
-    setQuestion(''); setCue(q); setThinking(true); stop(); setPhase('idle'); setLive(null)
+    setQuestion(''); setCue(q); setFollowups([]); setThinking(true); stop(); setPhase('idle'); setLive(null)
     const ac = new AbortController()
     abort.current = ac
     const prior = turns.filter((t) => t.q && !t.gap)
@@ -203,6 +204,13 @@ function Main() {
       if (ac.signal.aborted) return
       chunker.flush().forEach(sp.push)
       sp.end()
+      // while the voice finishes, quietly work out what to ask next
+      const topics = repo ? hits.map(sourceLabel).join('; ') : facts!.repos.slice(0, 8).map((r) => r.name).join(', ')
+      const asked = [...prior.map((t) => t.q!), q]
+      const fill = repo
+        ? { headings: hits.map((h) => h.chunk.heading.split(' › ').pop() ?? '') }
+        : { repos: facts!.repos.slice(0, 6).map((r) => r.name) }
+      void suggestFollowups(repo ? repo.facts.name : facts!.name, q, clean(full), asked, topics, fill, ac.signal).then((f) => { if (!ac.signal.aborted) setFollowups(f) })
       await sp.done
     } catch (err) {
       setMsg(err instanceof Error ? err.message : String(err))
@@ -307,10 +315,10 @@ function Main() {
         </section>
 
         <section className="stage" ref={stage}>
-          {cue && <p className="asked">{cue}</p>}
-          {(msg || notice) && (
+          {(cue || msg || notice) && (
             <div className="cue">
-              <p className={`status${phase === 'error' || notice ? ' warn' : ''}`}>{msg || notice}</p>
+              {cue && <p className="q">{cue}</p>}
+              {(msg || notice) && <p className={`status${phase === 'error' || notice ? ' warn' : ''}`}>{msg || notice}</p>}
             </div>
           )}
           {lines.length ? (
@@ -322,11 +330,13 @@ function Main() {
             </div>
           )}
           {thinking && live === null && !msg && <p className="dots stage-dots"><i /><i /><i /></p>}
-          {loaded && !log && turns.length <= 1 && !thinking && !listening && phase !== 'fetching' && (
-            <div className="starters">
-              {starters.map((t) => <button key={t} type="button" onClick={() => send(t)}>{t}</button>)}
-            </div>
-          )}
+          <div className="under">
+            {loaded && !log && !thinking && !listening && phase !== 'fetching' && (followups.length || turns.length <= 1) ? (
+              <div className="starters">
+                {(followups.length ? followups : starters).map((t) => <button key={t} type="button" onClick={() => send(t)}>{t}</button>)}
+              </div>
+            ) : null}
+          </div>
         </section>
 
         <form className="dock" onSubmit={(e) => { e.preventDefault(); send(question) }}>
@@ -376,8 +386,12 @@ function Main() {
           </section>
         )}
         <footer className="foot">
-          <span>on-device · no cloud{ttfa !== null && <> · first audio {ttfa} ms</>}</span>
-          <span>AI can make mistakes. Check the answers.</span>
+          <span className="lat" title="Time to first audio · on-device, no cloud" aria-label={ttfa !== null ? `On-device, no cloud. Time to first audio ${ttfa} milliseconds` : 'On-device, no cloud'}>
+            on-device · no cloud ·
+            <svg viewBox="0 0 18 12" width="18" height="12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden><path d="M1 5v2M5 2.5v7M9 1v10M13 3v6M17 5v2" /></svg>
+            {ttfa !== null && <>{ttfa} ms</>}
+          </span>
+          <span>AI can make mistakes.</span>
         </footer>
       </main>
     </>

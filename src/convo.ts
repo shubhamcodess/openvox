@@ -75,3 +75,50 @@ export function factReply(question: string, f: Pick<Facts, 'name' | 'company' | 
   }
   return null
 }
+
+/** Prompt for silently proposing what to ask next. `topics` keeps the suggestions inside what we can answer. */
+export function followupPrompt(subject: string, question: string, answer: string, asked: string[], topics: string): Msg[] {
+  return [
+    {
+      role: 'system',
+      content: `You suggest what a listener could ask next in a voice conversation about ${subject}. Write three different short questions, each under nine words and specific to ${subject}, each on its own line. Output only the three lines, nothing else. They must be answerable from these topics: ${topics}. Do not repeat anything already asked.`,
+    },
+    { role: 'user', content: `Already asked: ${asked.slice(-6).join(' | ')}\nLast question: ${question}\nLast answer: ${answer.slice(0, 400)}\n\nWrite the three questions now, one per line:` },
+  ]
+}
+
+/** Clean model output into at most three distinct questions, none already asked. */
+export function parseFollowups(raw: string, asked: string[]): string[] {
+  const seen = new Set(asked.map((q) => q.toLowerCase().replace(/[^a-z0-9]/g, '')))
+  const out: string[] = []
+  for (const line of raw.replace(/<\/?think>/g, '').split('\n')) {
+    const q = line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').replace(/^["']|["']$/g, '').trim()
+    const key = q.toLowerCase().replace(/[^a-z0-9]/g, '')
+    if (q.length < 8 || q.length > 70 || !q.endsWith('?') || seen.has(key)) continue
+    seen.add(key)
+    out.push(q)
+    if (out.length === 3) break
+  }
+  return out
+}
+
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+const GENERIC = /^(readme|documentation|docs?|overview|introduction|table of contents|contents|license|licence|contributing|why|what this is)$/i
+
+/**
+ * Grounded fallbacks that need no model: sections the answer drew on, repos not discussed yet, or stock questions.
+ * `headings` are excerpt section titles (repo mode); `repos` are repo names, most relevant first (profile mode).
+ */
+export function templateFollowups(opts: { headings?: string[]; repos?: string[]; asked: string[] }): string[] {
+  const asked = opts.asked.map(norm)
+  const out: string[] = []
+  const add = (q: string) => { if (!out.some((x) => norm(x) === norm(q)) && !asked.some((a) => a === norm(q) || a.includes(norm(q)))) out.push(q) }
+  for (const h of opts.headings ?? []) {
+    const t = h.replace(/^[\d.\s]+/, '').replace(/[^\w\s'-]/g, '').trim()
+    if (t.length > 3 && t.length < 40 && !GENERIC.test(t) && !asked.some((a) => a.includes(norm(t)))) add(`Tell me about ${t.toLowerCase()}`)
+  }
+  for (const r of opts.repos ?? []) if (!asked.some((a) => a.includes(norm(r)))) add(`What is ${r.replace(/[-_]/g, ' ')} about?`)
+  if (opts.headings) ['How active is it?', 'How can I contribute?', 'What license does it use?'].forEach(add)
+  else ['What are they working on lately?', 'What languages do they use?'].forEach(add)
+  return out
+}

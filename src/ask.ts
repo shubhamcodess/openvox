@@ -1,7 +1,7 @@
 import type { Facts } from './github'
 import { chat, type Msg } from './llm'
 import type { RepoFacts } from './repo'
-import { trimHistory } from './convo'
+import { followupPrompt, parseFollowups, templateFollowups, trimHistory } from './convo'
 import type { Hit } from './retrieval'
 
 const fmt = (n: number) => n.toLocaleString('en-US')
@@ -159,4 +159,19 @@ export function buildRepoMessages(repo: RepoFacts, owner: Facts | null, history:
 
 export async function* answerMsgs(msgs: Msg[], signal?: AbortSignal) {
   yield* chat(msgs, signal)
+}
+
+/** Silently asks the model what to ask next, then tops up to three with grounded templates. Never throws. */
+export async function suggestFollowups(
+  subject: string, question: string, answer: string, asked: string[], topics: string,
+  fill: { headings?: string[]; repos?: string[] }, signal?: AbortSignal,
+): Promise<string[]> {
+  let fromModel: string[] = []
+  try {
+    let raw = ''
+    for await (const d of chat(followupPrompt(subject, question, answer, asked, topics), signal)) raw += d
+    fromModel = parseFollowups(raw, asked)
+  } catch { /* fall through to templates */ }
+  const have = [...asked, ...fromModel]
+  return [...fromModel, ...templateFollowups({ ...fill, asked: have })].slice(0, 3)
 }
