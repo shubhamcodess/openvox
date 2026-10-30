@@ -10,7 +10,7 @@ import { factReply, gapReply, intentOf, nextRule, orderedMentions, parseNext, re
 import { Session } from './session'
 import { answerMsgs, buildMessages, buildRepoMessages, sourceLabel, suggestFollowups, SentenceChunker, clean } from './ask'
 import { buildProfileIndex, mentionedRepos, portraitHits } from './profile'
-import { isMobile, loadModel, pickModel, type Msg } from './llm'
+import { isMobile, loadModel, pickModel, resetModel, type Msg } from './llm'
 import { loadStt } from './stt'
 import Eval from './Eval'
 import Wave from './Wave'
@@ -150,7 +150,6 @@ function Main() {
       }
       setTurns([{ a: '' }])
       if (ctx.current) ctx.current.intro = script.join(' ')
-      warm()
       setNotice(takeRateLimited() ? 'GitHub rate limit hit (60 requests/hour, anonymous). Some details may be missing; it resets within the hour.' : '')
       setPhase('voice'); setMsg('loading voice · first run ~65 MB')
       await loadVoice((p) => setMsg(`loading voice · ${p}%`))
@@ -160,6 +159,7 @@ function Main() {
       sp.end()
       await sp.done
       setPhase('idle')
+      warm() // after the intro: model work on the GPU while the voice plays makes the audio stutter
     } catch (err) {
       if (script.length) setTurns([{ a: script.join(' ') }])
       setPhase('error'); setMsg(err instanceof Error ? err.message : String(err))
@@ -175,11 +175,26 @@ function Main() {
     void suggestFollowups(session, c.sys, c.subject, [...asked, ...suggested.current], ctl.signal).then((f) => { if (ctl.signal.aborted) return; suggested.current.push(...f); setFollowups(f) })
   }
 
-  function newSession() {
+  /** Clear just the conversation: the loaded profile or repo stays, the model forgets what was said. */
+  function clearChat() {
     hush()
     session.clear(); suggested.current = []
-    setTurns([{ a: ctx.current?.intro ?? '' }]); setCue(''); setLines([]); setLive(null); setMsg(''); setThinking(false); setFollowups([])
+    void resetModel()
+    setTurns(turns.length ? [{ a: ctx.current?.intro ?? '' }] : []); setCue(''); setLines([]); setLive(null); setMsg(''); setHeard('')
+    setThinking(false); setFollowups([]); setLog(false)
     warm()
+  }
+
+  /** Back to a blank page: stops audio, drops the model's memory of this profile, clears the inputs. */
+  function newSession() {
+    booting.current = false
+    hush()
+    session.clear(); suggested.current = []; ctx.current = null
+    void resetModel()
+    setFacts(null); setRepo(null); setOwner(''); setRepoName('')
+    setTurns([]); setCue(''); setLines([]); setLive(null); setMsg(''); setHeard(''); setNotice('')
+    setThinking(false); setFollowups([]); setTtfa(null); setLog(false); setPhase('idle')
+    history.replaceState(null, '', location.pathname)
   }
 
   async function send(raw: string) {
@@ -342,7 +357,7 @@ function Main() {
               {picks.map((r) => <option key={r.name} value={r.name} label={`${r.stars ? `★ ${r.stars} · ` : ''}${r.description ?? r.language ?? ''}`.slice(0, 90)} />)}
             </datalist>
             <button className="go" disabled={busy || !owner.trim()} aria-label="Load">{busy ? <span className="spin" /> : '→'}</button>
-            {loaded && <button type="button" className="go fresh" onClick={newSession} disabled={busy} aria-label="New session" title="New session">↺</button>}
+            {(loaded || owner || repoName) && <button type="button" className="go fresh" onClick={newSession} aria-label="New session" title="New session">↺</button>}
           </form>
           {loaded && (
             <dl className="stats">
@@ -381,6 +396,11 @@ function Main() {
           <button type="button" className={`ico${log ? ' on' : ''}`} onClick={() => setLog((v) => !v)} aria-label="Toggle transcript" aria-pressed={log} title="Transcript">
             <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M3 4h10M3 8h10M3 12h6" /></svg>
           </button>
+          {loaded && turns.length > 1 && (
+            <button type="button" className="ico" onClick={clearChat} aria-label="Clear chat" title="Clear chat, keep profile">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M3 5h10M6.5 5V3.5h3V5M5 5l.5 8h5L11 5" /></svg>
+            </button>
+          )}
           {listening && earState !== 'loading' ? (
             <div className={`ear ${earState}`}>
               <Wave state={earState} />

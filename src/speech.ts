@@ -57,7 +57,7 @@ export function startSpeaker(
       analyser.smoothingTimeConstant = 0.7
       analyser.connect(ctx.destination)
     }
-    let cursor = ctx.currentTime + 0.05
+    let cursor = ctx.currentTime + 0.12
     let first = true
     let i = 0
     while (!signal.aborted) {

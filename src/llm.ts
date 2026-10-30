@@ -69,6 +69,9 @@ export function loadModel(id: string, onProgress: (p: number, text: string) => v
   })())
 }
 
+/** Forget the conversation inside the model (KV cache), so nothing about the last profile lingers. */
+export async function resetModel() { try { await engine?.resetChat() } catch { /* nothing loaded */ } }
+
 export interface Msg { role: 'system' | 'user' | 'assistant'; content: string }
 
 /** Streams content deltas. */
